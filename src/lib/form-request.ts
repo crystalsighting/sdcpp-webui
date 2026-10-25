@@ -152,8 +152,18 @@ export function buildImageRequestBody(form: GenerationForm) {
 }
 
 export function buildVideoRequestBody(form: GenerationForm) {
-    if (form.ref_images.length && (form.init_image || form.end_image)) {
-        throw new Error("Video reference images cannot be combined with an initial or end frame. Clear the reference images or both keyframes before generating.");
+    if ((form.ref_images.length || form.ref_video) && (form.init_image || form.end_image)) {
+        throw new Error("Reference images/videos cannot be combined with an initial or end frame. Clear the references or both keyframes before generating.");
+    }
+    for (const entry of [form.ref_video, form.ref_audio]) {
+        if (!entry) continue;
+        if (entry.processing) throw new Error("Wait for reference media processing to finish.");
+        if (entry.error) throw new Error(entry.error);
+    }
+    if (form.ref_video && !form.ref_video.frames.length) throw new Error("The reference video has no decoded frames.");
+    if (form.ref_audio && !form.ref_audio.audio) throw new Error("The reference audio has not been decoded.");
+    if (form.ref_video?.useAudio && !form.ref_video.audio) {
+        throw new Error(form.ref_video.audioError || "The video soundtrack has not been decoded.");
     }
 
     return {
@@ -166,6 +176,9 @@ export function buildVideoRequestBody(form: GenerationForm) {
         end_image: form.end_image ? form.end_image.dataUrl : null,
         control_frames: form.control_frames.map((item) => item.dataUrl),
         ref_images: form.ref_images.map((item) => item.dataUrl),
+        ref_videos: form.ref_video ? [form.ref_video.frames] : [],
+        ref_audios: form.ref_audio ? [form.ref_audio.audio] : [],
+        ref_video_audios: form.ref_video?.useAudio ? [form.ref_video.audio] : [],
         high_noise_sample_params: buildSampleParams(form.high_noise_sample_params, -1),
     };
 }
@@ -181,6 +194,9 @@ export function buildRequestBodyForMode(mode: GenerationMode, form: GenerationFo
         control_image: features.control_image ? form.control_image : null,
         ip_adapter_image: features.ip_adapter ? form.ip_adapter_image : null,
         ref_images: features.ref_images ? form.ref_images : [],
+        ref_video: features.ref_videos && form.ref_video
+            ? { ...form.ref_video, useAudio: Boolean(features.ref_video_audios && form.ref_video.useAudio) } : null,
+        ref_audio: features.ref_audios ? form.ref_audio : null,
         control_frames: features.control_frames ? form.control_frames : [],
     };
     const request: Record<string, any> = mode === "video" ? buildVideoRequestBody(visibleForm) : buildImageRequestBody(visibleForm);
@@ -189,6 +205,7 @@ export function buildRequestBodyForMode(mode: GenerationMode, form: GenerationFo
         mask_image: ["mask_image"], controlnet: ["control_strength"],
         control_image: ["control_image"], ip_adapter: ["ip_adapter_image", "ip_adapter_strength"],
         ref_images: ["ref_images", "auto_resize_ref_image", "increase_ref_index"],
+        ref_videos: ["ref_videos"], ref_audios: ["ref_audios"], ref_video_audios: ["ref_video_audios"],
         end_image: ["end_image"], control_frames: ["control_frames"], vace: ["vace_strength"],
         high_noise: ["high_noise_sample_params", "moe_boundary"], lora: ["lora"],
         vae_tiling: ["vae_tiling_params"], cache: ["cache_mode", "cache_option", "scm_mask", "scm_policy_dynamic"],

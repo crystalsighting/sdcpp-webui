@@ -27,6 +27,7 @@ The current UI supports:
 - conditioning controls such as `clip_skip`, `strength`, `control_strength`, `moe_boundary`, and `vace_strength`
 - LoRA selection from server capabilities
 - init image, end image, mask image, control image, control frames, and reference images
+- original reference video and audio file inputs, with browser-side decoding and optional video soundtrack conditioning
 - VAE tiling controls
 - cache controls
 - job polling, cancellation, image preview, and video or animated WebP preview

@@ -628,6 +628,24 @@ button {
     border-color: var(--focus-border);
 }
 
+.media-input + .media-input {
+    margin-top: 16px;
+}
+
+.media-input__preview {
+    width: 100%;
+    max-height: 220px;
+}
+
+.media-input__name {
+    overflow-wrap: anywhere;
+}
+
+.media-input .checkbox input {
+    width: auto;
+    flex: none;
+}
+
 .upload-card__preview-button,
 .thumb {
     background: var(--checker-bg);

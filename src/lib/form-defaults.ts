@@ -67,6 +67,8 @@ export function createBlankForm(): GenerationForm {
         init_image: null,
         end_image: null,
         ref_images: [],
+        ref_video: null,
+        ref_audio: null,
         control_frames: [],
         mask_image: null,
         control_image: null,

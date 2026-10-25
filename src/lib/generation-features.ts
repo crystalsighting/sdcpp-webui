@@ -4,7 +4,7 @@ export function featuresForMode(features: GenerationFeatures, mode: GenerationMo
     const result = { ...features };
     if (mode === "image") {
         result.init_image = Boolean(result.img2img);
-        for (const key of ["end_image", "control_frames", "vace", "high_noise"]) result[key] = false;
+        for (const key of ["end_image", "control_frames", "vace", "high_noise", "ref_videos", "ref_audios", "ref_video_audios"]) result[key] = false;
     } else {
         for (const key of ["img2img", "mask_image", "controlnet", "control_image", "ip_adapter", "shifted_timestep"]) result[key] = false;
     }

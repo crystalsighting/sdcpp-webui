@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, toRef, watch } from "vue";
 
 import CollapsibleSection from "./components/CollapsibleSection.vue";
 import ModelSelector from "./components/ModelSelector.vue";
 import SearchableSelect from "./components/SearchableSelect.vue";
 import ImageDropzone from "./components/ImageDropzone.vue";
+import MediaDropzone from "./components/MediaDropzone.vue";
 import StatusChip from "./components/StatusChip.vue";
 import { cancelJob, getCapabilities, getJob, submitImageJob, submitVideoJob } from "./lib/api";
 import { applyRecipeDefaults, buildRequestBodyForMode, createBlankForm, formFromCapabilities } from "./lib/form";
@@ -13,6 +14,7 @@ import { IMAGE_INPUTS, VIDEO_IMAGE_INPUTS } from "./lib/image-inputs";
 import { assignImageEntries, clearImageEntries, filesToImageEntries, removeImageEntry } from "./lib/images";
 import { createStoredRef, normalizePollIntervalMs } from "./lib/settings";
 import { useTheme } from "./lib/theme";
+import { useMediaInput } from "./lib/media-input";
 import type {
     Capabilities,
     ModelStatus,
@@ -45,6 +47,7 @@ const sectionState = reactive<Record<string, boolean>>({
     highNoiseGuidance: true,
     conditioning: false,
     auxiliaryImages: false,
+    referenceMedia: true,
     lora: false,
     vaeTiling: false,
     preview: false,
@@ -66,6 +69,9 @@ const statusTone = ref("");
 const cancelling = ref(false);
 let pollVersion = 0;
 const form = reactive<GenerationForm>(createBlankForm());
+const videoInput = useMediaInput("video", toRef(form, "ref_video"));
+const audioInput = useMediaInput("audio", toRef(form, "ref_audio"));
+const submitting = ref(false);
 
 let pollTimer = 0;
 let elapsedTimer = 0;
@@ -124,6 +130,10 @@ const generationFeatures = computed<GenerationFeatures>(() => {
     return featuresForMode(features, generationMode.value);
 });
 const hasFeature = (name: string): boolean => Boolean(generationFeatures.value[name]);
+const mediaProcessing = computed(() => (hasFeature("ref_videos") && form.ref_video?.processing) ||
+    (hasFeature("ref_audios") && form.ref_audio?.processing));
+const mediaSummary = computed(() => [hasFeature("ref_videos") && form.ref_video ? "1 video" : "",
+    hasFeature("ref_audios") && form.ref_audio ? "1 audio" : ""].filter(Boolean).join(" · ") || "No media");
 const sampleHasEta = (sample: SampleParams): boolean => supportsEta(sample.sample_method, generationFeatures.value);
 const sampleHasFlowShift = (sample: SampleParams): boolean => supportsFlowShift(sample.scheduler, generationFeatures.value);
 const sampleHasExtras = (sample: SampleParams): boolean => sampleHasEta(sample) || hasFeature("shifted_timestep");
@@ -469,7 +479,8 @@ async function pollJob(id: string): Promise<void> {
 }
 
 async function generate(): Promise<void> {
-    if (!canGenerate.value || isJobRunning.value) return;
+    if (!canGenerate.value || isJobRunning.value || mediaProcessing.value || submitting.value) return;
+    submitting.value = true;
     try {
         const request = buildRequestBodyForMode(generationMode.value, form, generationFeatures.value);
         clearMessage();
@@ -482,6 +493,8 @@ async function generate(): Promise<void> {
     } catch (error) {
         stopElapsedTimer();
         setMessage(error instanceof Error ? error.message : String(error), "error");
+    } finally {
+        submitting.value = false;
     }
 }
 
@@ -610,6 +623,7 @@ watch(cacheModes, (modes) => { if (!modes.includes(form.cache.mode)) form.cache.
 watch(previewModes, (modes) => { if (!modes.includes(form.preview_mode)) form.preview_mode = "none"; });
 watch(generationFeatures, (features) => {
     if (!features.high_noise) form.lora = form.lora.filter((item) => !item.is_high_noise);
+    if (!features.ref_video_audios) videoInput.setUseAudio(false);
 });
 
 watch(generationMode, (mode) => {
@@ -976,6 +990,11 @@ onBeforeUnmount(() => {
                     </div>
                 </CollapsibleSection>
 
+                <CollapsibleSection v-if="hasFeature('ref_videos') || hasFeature('ref_audios')" class="stack-top" eyebrow="Reference Media" :summary="mediaSummary" :open="sectionState.referenceMedia" @toggle="toggleSection('referenceMedia')">
+                    <MediaDropzone v-if="hasFeature('ref_videos')" kind="video" :entry="form.ref_video" :allow-soundtrack="hasFeature('ref_video_audios')" @select="videoInput.select" @clear="videoInput.clear" @soundtrack="videoInput.setUseAudio" />
+                    <MediaDropzone v-if="hasFeature('ref_audios')" kind="audio" :entry="form.ref_audio" @select="audioInput.select" @clear="audioInput.clear" />
+                </CollapsibleSection>
+
                 <CollapsibleSection v-if="hasFeature('vae_tiling')" class="stack-top" eyebrow="VAE Tiling" :summary="vaeTilingSummary" :open="sectionState.vaeTiling" @toggle="toggleSection('vaeTiling')">
                     <label class="checkbox"><input v-model="form.vae_tiling_params.enabled" type="checkbox" /><span>Enabled</span></label>
                     <div class="fields">
@@ -1081,7 +1100,7 @@ onBeforeUnmount(() => {
                 <div v-else-if="currentJob?.error?.message" class="status-message status-message--error">{{ currentJob.error.message }}</div>
 
                 <div class="output-controls">
-                    <button class="btn output-controls__primary" type="button" :disabled="isJobRunning || !canGenerate" @click="generate">
+                    <button class="btn output-controls__primary" type="button" :disabled="isJobRunning || !canGenerate || mediaProcessing || submitting" @click="generate">
                         {{ generationMode === "video" ? "Generate Video" : "Generate Image" }}
                     </button>
                     <div class="actions output-controls__secondary">

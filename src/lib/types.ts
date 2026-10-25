@@ -10,6 +10,19 @@ export interface ImageEntry {
   dataUrl: string;
 }
 
+export interface MediaReference {
+  file: File;
+  url: string;
+  duration: number;
+  frames: string[];
+  audio: string;
+  useAudio: boolean;
+  processing: boolean;
+  progress: string;
+  error: string;
+  audioError: string;
+}
+
 export type ImageTarget =
   | "init_image"
   | "mask_image"
@@ -98,6 +111,8 @@ export interface GenerationForm {
   init_image: ImageEntry | null;
   end_image: ImageEntry | null;
   ref_images: ImageEntry[];
+  ref_video: MediaReference | null;
+  ref_audio: MediaReference | null;
   control_frames: ImageEntry[];
   mask_image: ImageEntry | null;
   control_image: ImageEntry | null;

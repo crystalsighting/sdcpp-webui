@@ -25,7 +25,7 @@ The current UI supports:
 - sampler and scheduler selection
 - guidance controls, including the video high-noise stage
 - conditioning controls such as `clip_skip`, `strength`, `control_strength`, `moe_boundary`, and `vace_strength`
-- LoRA selection from server capabilities
+- LoRA rows integrated into Models, with counts in the Models summary; selections, multipliers, and high-noise targets are saved locally per server and recipe, and unavailable entries are retained but excluded from generation
 - init image, end image, mask image, control image, control frames, and reference images
 - original reference video and audio file inputs, with browser-side decoding and optional video soundtrack conditioning
 - VAE tiling controls

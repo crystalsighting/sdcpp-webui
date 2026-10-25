@@ -6,7 +6,7 @@ import { createStoredRef } from "../lib/settings";
 import { getModelFiles, getModelStatus, getRecipes, loadModel, refreshModels, unloadModel } from "../lib/api";
 import type { CatalogError, ModelFile, ModelStatus, Recipe } from "../lib/types";
 
-const props = defineProps<{ baseUrl: string; busy: boolean; applyDefaults: boolean }>();
+const props = defineProps<{ baseUrl: string; busy: boolean; applyDefaults: boolean; loraSummary?: string }>();
 const emit = defineEmits<{
     (event: "update:applyDefaults", value: boolean): void;
     (event: "status", value: ModelStatus): void;
@@ -54,9 +54,9 @@ const loadTiming = computed(() => {
     return "";
 });
 const statusSummary = computed(() => {
-    if (!status.value || status.value.state === "empty") return "-";
+    if (!status.value || status.value.state === "empty") return [recipe.value?.name || "No recipe selected", "Not loaded", props.loraSummary].filter(Boolean).join(" · ");
     const name = availableRecipes.value.find((item) => item.id === status.value?.recipe)?.name;
-    return [status.value?.state || "Connecting", name || (status.value?.origin === "command_line" ? "loaded from command line" : ""), loadTiming.value].filter(Boolean).join(" · ");
+    return [status.value?.state || "Connecting", name || (status.value?.origin === "command_line" ? "loaded from command line" : ""), loadTiming.value, props.loraSummary].filter(Boolean).join(" · ");
 });
 const recipe = computed(() => availableRecipes.value.find((item) => item.id === selectedId.value));
 const orderedSlots = computed(() => [...(recipe.value?.slots || [])].sort((a, b) => Number(b.required) - Number(a.required)));
@@ -139,6 +139,7 @@ async function refresh(rescan = true): Promise<void> {
         restorePending = false;
         if (restoring && recipe.value) emit("recipe", recipe.value);
         emit("catalogRecipe", recipe.value || null);
+        if (rescan) emit("changed");
     } catch (cause) {
         if (current === revision) error.value = cause instanceof Error ? cause.message : String(cause);
     } finally {
@@ -251,6 +252,7 @@ onBeforeUnmount(() => { revision++; window.clearInterval(timer); });
         <p v-if="status?.state === 'loading'" class="hint">Loading models. This can take a few minutes.</p>
         <div v-if="error || status?.error" class="status-message status-message--error">{{ error || status?.error }}</div>
         <div v-for="(issue, index) in catalogErrors" :key="index" class="status-message status-message--error">{{ issue.file }}: {{ issue.message }}</div>
+        <slot name="lora" />
     </CollapsibleSection>
 </template>
 

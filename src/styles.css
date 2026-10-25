@@ -907,56 +907,53 @@ button {
     padding: 0;
 }
 
-.lora-section.module-card {
-    overflow: visible;
-}
-
-.lora-section > .advanced-group__toggle {
-    border-radius: var(--radius-md) var(--radius-md) 0 0;
-}
-
-.lora-section > .advanced-group__toggle[aria-expanded="false"] {
-    border-bottom: 0;
-    border-radius: var(--radius-md);
-}
-
-.lora-section > .advanced-group__content {
-    border-radius: 0 0 var(--radius-md) var(--radius-md);
-}
-
-.list-editor {
+.model-loras {
     display: grid;
-    grid-template-columns: minmax(0, 1.6fr) minmax(96px, 0.8fr) auto auto;
-    gap: 10px;
+    gap: 16px;
     min-width: 0;
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
 }
 
-.list-editor--single-pass {
-    grid-template-columns: minmax(0, 1.6fr) minmax(96px, 0.8fr) auto;
-}
-
-.list-row {
-    display: grid;
-    grid-template-columns: subgrid;
-    grid-column: 1 / -1;
-    gap: 10px;
+.model-loras__title {
+    display: flex;
     align-items: center;
-    min-width: 0;
+    gap: 10px;
+    margin: 0 0 4px;
+    font-size: 13px;
+    font-weight: 600;
 }
 
-.list-row--header {
+.model-loras__title span {
     color: var(--muted);
     font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    font-weight: 400;
 }
 
-.list-row > * {
+.lora-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 120px auto;
+    gap: 8px 16px;
+    align-items: end;
     min-width: 0;
 }
 
-.list-row__checkbox {
-    justify-self: start;
+.lora-row--high-noise {
+    grid-template-columns: minmax(0, 1fr) 120px 100px auto;
+}
+
+.lora-row > * {
+    min-width: 0;
+}
+
+.lora-row__target,
+.lora-row__remove {
+    height: 42px;
+}
+
+.lora-row__notice {
+    grid-column: 1 / -1;
+    color: var(--warning);
 }
 
 .checkbox {
@@ -999,12 +996,6 @@ button {
     padding: 10px 14px;
 }
 
-@media (max-width: 1180px) {
-    .list-row {
-        grid-template-columns: minmax(0, 1fr);
-    }
-}
-
 @media (max-width: 900px) {
     .layout {
         grid-template-columns: 1fr;
@@ -1023,13 +1014,26 @@ button {
     .settings__grid,
     .fields,
     .output-metrics,
-    .list-row,
     .output-controls__secondary {
         grid-template-columns: 1fr;
     }
 }
 
 @media (max-width: 720px) {
+    .lora-row,
+    .lora-row--high-noise {
+        grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .lora-row > .field:first-child {
+        grid-column: 1 / -1;
+    }
+
+    .lora-row__remove {
+        justify-self: end;
+        grid-column: 2;
+    }
+
     #app {
         width: calc(100vw - 16px);
         padding-top: 12px;

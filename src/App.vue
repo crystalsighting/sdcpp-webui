@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, toRef, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, toRef, watch } from "vue";
 
 import CollapsibleSection from "./components/CollapsibleSection.vue";
 import ModelSelector from "./components/ModelSelector.vue";
@@ -13,6 +13,7 @@ import { availableCacheModes, featuresForMode, supportsEta, supportsFlowShift, u
 import { IMAGE_INPUTS, VIDEO_IMAGE_INPUTS } from "./lib/image-inputs";
 import { assignImageEntries, clearImageEntries, filesToImageEntries, removeImageEntry } from "./lib/images";
 import { createStoredRef, normalizePollIntervalMs, normalizePreviewInterval } from "./lib/settings";
+import { useLoraSelection } from "./lib/lora-selection";
 import { useTheme } from "./lib/theme";
 import { useMediaInput } from "./lib/media-input";
 import type {
@@ -26,6 +27,7 @@ import type {
     ImageTarget,
     Job,
     SampleParams,
+    FormLoraEntry,
 } from "./lib/types";
 
 const baseUrl = createStoredRef<string>("sdcpp-webui-base-url", "", (value: unknown) => String(value || ""));
@@ -50,7 +52,6 @@ const sectionState = reactive<Record<string, boolean>>({
     conditioning: false,
     auxiliaryImages: false,
     referenceMedia: true,
-    lora: false,
     vaeTiling: false,
     cache: false,
 });
@@ -85,6 +86,7 @@ const modelName = computed(() => {
 
 const supportedModes = computed(() => capabilities.value?.supported_modes || []);
 const loadedRecipeId = computed(() => modelStatus.value?.runtime_recipe?.id || modelStatus.value?.recipe);
+const loras = useLoraSelection(baseUrl, computed(() => selectedRecipe.value?.id || loadedRecipeId.value || undefined));
 const recipeMode = computed<GenerationMode>(() => selectedRecipe.value?.source === "command_line"
     ? capabilities.value?.current_mode === "vid_gen" ? "video" : "image"
     : selectedRecipe.value?.defaults?.video_frames !== undefined ? "video" : "image");
@@ -244,13 +246,24 @@ const guidanceSummary = computed(() => buildGuidanceSummary(form.sample_params))
 const highNoiseSummary = computed(() => {
     return `moe ${formatSummaryNumber(form.moe_boundary)} · ${buildSampleSummary(form.high_noise_sample_params)} · ${buildGuidanceSummary(form.high_noise_sample_params)}`;
 });
+function loraInactiveReason(item: FormLoraEntry): string {
+    if (!item.path.trim()) return "";
+    if (!hasFeature("lora")) return "Inactive: this model does not support LoRA.";
+    if (item.is_high_noise && !hasFeature("high_noise")) return "Inactive: this model has no high-noise stage.";
+    if (capabilities.value && !availableLoras.value.some((lora) => lora.path === item.path)) return "Inactive: file not found. Select another LoRA or refresh files.";
+    return "";
+}
+const showLoras = computed(() => hasFeature("lora") || loras.value.length > 0);
+const showLoraHighNoise = computed(() => hasFeature("high_noise") || loras.value.some((item) => item.is_high_noise));
 const loraSummary = computed(() => {
-    const count = form.lora.filter((item) => item.path.trim()).length;
-    if (!count) {
-        return "No LoRA";
-    }
-    return `${count} configured`;
+    const configured = loras.value.filter((item) => item.path.trim());
+    const inactive = configured.filter((item) => loraInactiveReason(item)).length;
+    return configured.length ? `${configured.length} LoRA${configured.length === 1 ? "" : "s"}${inactive ? ` (${inactive} inactive)` : ""}` : "No LoRA";
 });
+const loraOptions = computed(() => [
+    ...availableLoras.value.map((lora) => ({ value: lora.path, label: lora.display_path || lora.path })),
+    ...[...new Set(loras.value.map((item) => item.path).filter((path) => path && !availableLoras.value.some((lora) => lora.path === path)))].map((path) => ({ value: path, label: `${path} (unavailable)` })),
+]);
 const imageInputsSummary = computed(() => {
     const parts: string[] = [];
     if (hasFeature("init_image") && form.init_image) parts.push(generationMode.value === "video" ? "start" : "init");
@@ -488,6 +501,7 @@ async function generate(): Promise<void> {
     try {
         const request = buildRequestBodyForMode(generationMode.value, {
             ...form,
+            lora: loras.value.filter((item) => !loraInactiveReason(item)),
             preview_mode: previewMode.value,
             preview_interval: normalizePreviewInterval(previewInterval.value),
         }, generationFeatures.value);
@@ -525,16 +539,19 @@ async function cancelCurrentJob(): Promise<void> {
     }
 }
 
-function addLora(): void {
-    form.lora.push({
+async function addLora(): Promise<void> {
+    const index = loras.value.length;
+    loras.value.push({
         path: "",
         multiplier: 1,
         is_high_noise: false,
     });
+    await nextTick();
+    document.getElementById(`lora-${index}`)?.focus();
 }
 
 function removeLora(index: number): void {
-    form.lora.splice(index, 1);
+    loras.value.splice(index, 1);
 }
 
 async function assignImages(target: ImageTarget, files: FileList): Promise<void> {
@@ -629,7 +646,6 @@ watch(baseUrl, () => { selectedRecipe.value = null; });
 
 watch(cacheModes, (modes) => { if (!modes.includes(form.cache.mode)) form.cache.mode = "disabled"; });
 watch(generationFeatures, (features) => {
-    if (!features.high_noise) form.lora = form.lora.filter((item) => !item.is_high_noise);
     if (!features.ref_video_audios) videoInput.setUseAudio(false);
 });
 
@@ -744,7 +760,39 @@ onBeforeUnmount(() => {
             </div>
         </header>
 
-        <ModelSelector v-model:apply-defaults="applyRecipeDefaultsOnSelect" :base-url="baseUrl" :busy="isJobRunning" @status="modelStatus = $event" @changed="refreshCapabilities" @recipe="selectRecipe" @selection="modelSelection = $event" @catalog-recipe="updateCatalogRecipe" />
+        <ModelSelector v-model:apply-defaults="applyRecipeDefaultsOnSelect" :base-url="baseUrl" :busy="isJobRunning" :lora-summary="loraSummary" @status="modelStatus = $event" @changed="refreshCapabilities" @recipe="selectRecipe" @selection="modelSelection = $event" @catalog-recipe="updateCatalogRecipe">
+            <template #lora>
+                <section v-if="showLoras" class="model-loras" aria-labelledby="model-loras-title">
+                    <div>
+                        <h3 id="model-loras-title" class="model-loras__title">LoRAs <span>Optional</span></h3>
+                        <div class="hint">Saved for this recipe. Applies on generation without reloading models.</div>
+                    </div>
+                    <div v-if="!loras.length" class="hint">{{ availableLoras.length ? 'No LoRAs selected.' : 'No LoRA files found. Add files and refresh.' }}</div>
+                    <div v-for="(item, index) in loras" :key="index" class="lora-row" :class="{ 'lora-row--high-noise': showLoraHighNoise }">
+                        <div class="field">
+                            <label :for="'lora-' + index">LoRA {{ index + 1 }}</label>
+                            <SearchableSelect :id="'lora-' + index" v-model="item.path" :aria-label="'LoRA ' + (index + 1)" :options="loraOptions" placeholder="Select a LoRA" />
+                        </div>
+                        <div class="field">
+                            <label :for="'lora-multiplier-' + index">Multiplier</label>
+                            <input :id="'lora-multiplier-' + index" v-model.number="item.multiplier" type="number" step="0.1" />
+                        </div>
+                        <div v-if="showLoraHighNoise" class="field">
+                            <label :for="'lora-high-noise-' + index">High Noise</label>
+                            <label class="checkbox lora-row__target">
+                                <input :id="'lora-high-noise-' + index" v-model="item.is_high_noise" type="checkbox" />
+                                <span>{{ item.is_high_noise ? "On" : "Off" }}</span>
+                            </label>
+                        </div>
+                        <button class="btn-ghost lora-row__remove" type="button" :aria-label="'Remove LoRA ' + (index + 1)" @click="removeLora(index)">Remove</button>
+                        <div v-if="loraInactiveReason(item)" class="hint lora-row__notice">{{ loraInactiveReason(item) }}</div>
+                    </div>
+                    <div class="actions">
+                        <button class="btn-secondary" type="button" @click="addLora" :disabled="!hasFeature('lora') || !availableLoras.length">Add LoRA</button>
+                    </div>
+                </section>
+            </template>
+        </ModelSelector>
 
         <div v-if="activeTab !== 'settings'" class="layout">
             <section class="panel control-panel">
@@ -887,31 +935,6 @@ onBeforeUnmount(() => {
                         <div v-if="hasFeature('controlnet')" class="field"><label>Control Strength</label><input v-model.number="form.control_strength" type="number" step="0.01" /></div>
                         <div v-if="hasFeature('vace')" class="field"><label>VACE Strength</label><input v-model.number="form.vace_strength" type="number" step="0.01" /></div>
                     </div>
-                </CollapsibleSection>
-
-                <CollapsibleSection v-if="hasFeature('lora')" class="stack-top lora-section" eyebrow="LoRA" :summary="loraSummary" :open="sectionState.lora" @toggle="toggleSection('lora')">
-                    <div v-if="!availableLoras.length" class="hint">No LoRA entries were returned by capabilities.</div>
-                    <div v-else-if="!form.lora.length" class="hint">No LoRA overrides configured.</div>
-                    <div v-else class="list-editor" :class="{ 'list-editor--single-pass': !hasFeature('high_noise') }">
-                        <div class="list-row list-row--header">
-                            <div>LoRA</div>
-                            <div>Multiplier</div>
-                            <div v-if="hasFeature('high_noise')">High Noise</div>
-                            <div></div>
-                        </div>
-                        <div v-for="(item, index) in form.lora" :key="index" class="list-row">
-                            <SearchableSelect :id="'lora-' + index" v-model="item.path" :aria-label="'LoRA ' + (index + 1)"
-                                :options="availableLoras.map((lora) => ({ value: lora.path, label: lora.display_path || lora.path }))"
-                                placeholder="Select a LoRA" />
-                            <input v-model.number="item.multiplier" type="number" step="0.1" />
-                            <label v-if="hasFeature('high_noise')" class="checkbox list-row__checkbox">
-                                <input v-model="item.is_high_noise" type="checkbox" />
-                                <span>{{ item.is_high_noise ? "On" : "Off" }}</span>
-                            </label>
-                            <button class="btn-ghost" type="button" @click="removeLora(index)">Remove</button>
-                        </div>
-                    </div>
-                    <div><button class="btn-ghost" type="button" @click="addLora" :disabled="!availableLoras.length">Add LoRA</button></div>
                 </CollapsibleSection>
 
                 <CollapsibleSection v-if="currentImageInputs.length || hasFeature('ref_images') || hasFeature('control_frames')" class="stack-top" eyebrow="Image Inputs" :summary="imageInputsSummary" :open="sectionState.auxiliaryImages" @toggle="toggleSection('auxiliaryImages')">

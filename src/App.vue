@@ -52,7 +52,6 @@ const sectionState = reactive<Record<string, boolean>>({
     conditioning: false,
     auxiliaryImages: false,
     referenceMedia: true,
-    vaeTiling: false,
     cache: false,
 });
 const loadingCapabilities = ref(false);
@@ -278,12 +277,6 @@ const imageInputsSummary = computed(() => {
         if (hasFeature("control_frames") && form.control_frames.length) parts.push(`${form.control_frames.length} frames`);
     }
     return parts.length ? parts.join(" · ") : "No images";
-});
-const vaeTilingSummary = computed(() => {
-    if (!form.vae_tiling_params.enabled) {
-        return "Disabled";
-    }
-    return `${form.vae_tiling_params.tile_size_w}×${form.vae_tiling_params.tile_size_h} · overlap ${form.vae_tiling_params.target_overlap}`;
 });
 const cacheSummary = computed(() => {
     const mode = form.cache.mode || "disabled";
@@ -756,6 +749,33 @@ onBeforeUnmount(() => {
                         The selected preview mode is unavailable for the current model configuration. Preview will be disabled; your preference is saved.
                     </div>
                 </fieldset>
+                <fieldset class="settings__group" :disabled="!hasFeature('vae_tiling')">
+                    <legend>VAE Tiling</legend>
+                    <label class="checkbox"><input v-model="form.vae_tiling_params.enabled" type="checkbox" /><span>Enabled</span></label>
+                    <div class="settings__grid stack-top">
+                        <div class="field">
+                            <label for="vae-tile-width">Tile Width (px)</label>
+                            <input id="vae-tile-width" v-model.number="form.vae_tiling_params.tile_size_w" type="number" :disabled="!form.vae_tiling_params.enabled" />
+                        </div>
+                        <div class="field">
+                            <label for="vae-tile-height">Tile Height (px)</label>
+                            <input id="vae-tile-height" v-model.number="form.vae_tiling_params.tile_size_h" type="number" :disabled="!form.vae_tiling_params.enabled" />
+                        </div>
+                        <div class="field">
+                            <label for="vae-tile-overlap">Target Overlap</label>
+                            <input id="vae-tile-overlap" v-model.number="form.vae_tiling_params.target_overlap" type="number" step="0.01" :disabled="!form.vae_tiling_params.enabled" />
+                        </div>
+                        <div class="field">
+                            <label for="vae-tile-relative-width">Relative Width</label>
+                            <input id="vae-tile-relative-width" v-model.number="form.vae_tiling_params.rel_size_w" type="number" step="0.01" :disabled="!form.vae_tiling_params.enabled" />
+                        </div>
+                        <div class="field">
+                            <label for="vae-tile-relative-height">Relative Height</label>
+                            <input id="vae-tile-relative-height" v-model.number="form.vae_tiling_params.rel_size_h" type="number" step="0.01" :disabled="!form.vae_tiling_params.enabled" />
+                        </div>
+                    </div>
+                    <div v-if="!hasFeature('vae_tiling')" class="hint stack-top">Select a model configuration that supports VAE tiling to use these settings.</div>
+                </fieldset>
                 <div v-if="capabilitiesError" class="status-message status-message--error">{{ capabilitiesError }}</div>
             </div>
         </header>
@@ -1041,19 +1061,6 @@ onBeforeUnmount(() => {
                 <CollapsibleSection v-if="hasFeature('ref_videos') || hasFeature('ref_audios')" class="stack-top" eyebrow="Reference Media" :summary="mediaSummary" :open="sectionState.referenceMedia" @toggle="toggleSection('referenceMedia')">
                     <MediaDropzone v-if="hasFeature('ref_videos')" kind="video" :entry="form.ref_video" :allow-soundtrack="hasFeature('ref_video_audios')" @select="videoInput.select" @clear="videoInput.clear" @soundtrack="videoInput.setUseAudio" />
                     <MediaDropzone v-if="hasFeature('ref_audios')" kind="audio" :entry="form.ref_audio" @select="audioInput.select" @clear="audioInput.clear" />
-                </CollapsibleSection>
-
-                <CollapsibleSection v-if="hasFeature('vae_tiling')" class="stack-top" eyebrow="VAE Tiling" :summary="vaeTilingSummary" :open="sectionState.vaeTiling" @toggle="toggleSection('vaeTiling')">
-                    <label class="checkbox"><input v-model="form.vae_tiling_params.enabled" type="checkbox" /><span>Enabled</span></label>
-                    <div class="fields">
-                        <div class="field"><label>Tile Width (px)</label><input v-model.number="form.vae_tiling_params.tile_size_w" type="number" /></div>
-                        <div class="field"><label>Tile Height (px)</label><input v-model.number="form.vae_tiling_params.tile_size_h" type="number" /></div>
-                    </div>
-                    <div class="field"><label>Target Overlap</label><input v-model.number="form.vae_tiling_params.target_overlap" type="number" step="0.01" /></div>
-                    <div class="fields">
-                        <div class="field"><label>Relative Width</label><input v-model.number="form.vae_tiling_params.rel_size_w" type="number" step="0.01" /></div>
-                        <div class="field"><label>Relative Height</label><input v-model.number="form.vae_tiling_params.rel_size_h" type="number" step="0.01" /></div>
-                    </div>
                 </CollapsibleSection>
 
                 <CollapsibleSection v-if="hasFeature('cache')" class="stack-top" eyebrow="Cache" :summary="cacheSummary" :open="sectionState.cache" @toggle="toggleSection('cache')">

@@ -27,6 +27,19 @@ const availableRecipes = computed(() => status.value?.runtime_recipe
     ? [status.value.runtime_recipe, ...recipes.value] : recipes.value);
 const selectedId = ref("");
 const selection = ref<Record<string, string>>({});
+interface SavedModelSelection {
+    recipe: string;
+    models: Record<string, string>;
+}
+const savedSelections = createStoredRef<Record<string, SavedModelSelection>>("sdcpp-webui-model-selections", {}, (value: unknown) => {
+    if (value && typeof value === "object" && !Array.isArray(value) && Object.values(value).every((saved) =>
+        saved && typeof saved.recipe === "string" && saved.models && typeof saved.models === "object" &&
+        !Array.isArray(saved.models) && Object.values(saved.models).every((id) => typeof id === "string"))) {
+        return value as Record<string, SavedModelSelection>;
+    }
+    return {};
+});
+const storageScope = computed(() => (props.baseUrl.trim() || window.location.origin + window.location.pathname).replace(/\/+$/, ""));
 const working = ref(false);
 const refreshing = ref(false);
 const error = ref("");
@@ -64,6 +77,7 @@ let timer = 0;
 let revision = 0;
 let polling = false;
 let previousStatus = "";
+let restorePending = true;
 
 function acceptStatus(next: ModelStatus): void {
     const signature = JSON.stringify(next);
@@ -90,7 +104,8 @@ function selectRecipe(id: string): void {
 }
 
 function restoreSelection(): void {
-    const current = status.value?.recipe === selectedId.value ? status.value.models : {};
+    const saved = savedSelections.value[storageScope.value];
+    const current = saved?.recipe === selectedId.value ? saved.models : status.value?.recipe === selectedId.value ? status.value.models : {};
     selection.value = Object.fromEntries((recipe.value?.slots || []).map((slot) => [slot.id, current[slot.id] || (slot.id === "tae" ? current.taesd : slot.id === "taesd" ? current.tae : "") || ""]));
 }
 
@@ -107,17 +122,23 @@ async function refresh(rescan = true): Promise<void> {
         files.value = modelFiles.files;
         catalogErrors.value = catalog.errors;
         acceptStatus(next);
+        const restoring = restorePending;
+        if (restoring && next.runtime_recipe) selectedId.value = next.runtime_recipe.id;
         if (!availableRecipes.value.some((item) => item.id === selectedId.value)) {
             const activeId = next.runtime_recipe?.id || next.recipe;
             selectedId.value = availableRecipes.value.some((item) => item.id === activeId)
                 ? activeId! : "";
             restoreSelection();
+        } else if (restoring) {
+            restoreSelection();
         }
-        emit("catalogRecipe", recipe.value || null);
         selection.value = Object.fromEntries((recipe.value?.slots || []).map((slot) => {
             const value = selection.value[slot.id] || "";
             return [slot.id, filesForSlot(slot).some((file) => file.id === value) ? value : ""];
         }));
+        restorePending = false;
+        if (restoring && recipe.value) emit("recipe", recipe.value);
+        emit("catalogRecipe", recipe.value || null);
     } catch (cause) {
         if (current === revision) error.value = cause instanceof Error ? cause.message : String(cause);
     } finally {
@@ -159,13 +180,22 @@ async function poll(): Promise<void> {
 
 watch(selection, (value) => emit("selection", { ...value }), { deep: true });
 
+watch([selectedId, selection], () => {
+    if (restorePending || !recipe.value || recipe.value.source === "command_line") return;
+    savedSelections.value = {
+        ...savedSelections.value,
+        [storageScope.value]: { recipe: selectedId.value, models: { ...selection.value } },
+    };
+}, { deep: true });
+
 watch(() => props.baseUrl, () => {
     revision++;
     previousStatus = "";
     status.value = null;
     recipes.value = [];
     files.value = [];
-    selectedId.value = "";
+    restorePending = true;
+    selectedId.value = savedSelections.value[storageScope.value]?.recipe || "";
     selection.value = {};
     working.value = false;
     window.clearInterval(timer);

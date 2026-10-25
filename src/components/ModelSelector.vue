@@ -29,15 +29,29 @@ const selectedId = ref("");
 const selection = ref<Record<string, string>>({});
 interface SavedModelSelection {
     recipe: string;
-    models: Record<string, string>;
+    modelsByRecipe: Record<string, Record<string, string>>;
+}
+function isModelSelection(value: unknown): value is Record<string, string> {
+    return Boolean(value && typeof value === "object" && !Array.isArray(value) && Object.values(value).every((id) => typeof id === "string"));
 }
 const savedSelections = createStoredRef<Record<string, SavedModelSelection>>("sdcpp-webui-model-selections", {}, (value: unknown) => {
-    if (value && typeof value === "object" && !Array.isArray(value) && Object.values(value).every((saved) =>
-        saved && typeof saved.recipe === "string" && saved.models && typeof saved.models === "object" &&
-        !Array.isArray(saved.models) && Object.values(saved.models).every((id) => typeof id === "string"))) {
-        return value as Record<string, SavedModelSelection>;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const normalized: Record<string, SavedModelSelection> = {};
+    let changed = false;
+    for (const [base, saved] of Object.entries(value)) {
+        if (saved && typeof saved.recipe === "string") {
+            if (saved.modelsByRecipe && typeof saved.modelsByRecipe === "object" && !Array.isArray(saved.modelsByRecipe) &&
+                Object.values(saved.modelsByRecipe).every(isModelSelection)) {
+                normalized[base] = saved;
+                continue;
+            }
+            if (isModelSelection(saved.models)) {
+                normalized[base] = { recipe: saved.recipe, modelsByRecipe: { [saved.recipe]: saved.models } };
+            }
+        }
+        changed = true;
     }
-    return {};
+    return changed ? normalized : value as Record<string, SavedModelSelection>;
 });
 const storageScope = computed(() => (props.baseUrl.trim() || window.location.origin + window.location.pathname).replace(/\/+$/, ""));
 const working = ref(false);
@@ -98,6 +112,7 @@ function filesForSlot(slot: Recipe["slots"][number]): ModelFile[] {
 }
 
 function selectRecipe(id: string): void {
+    saveSelection();
     selectedId.value = id;
     restoreSelection();
     if (recipe.value) emit("recipe", recipe.value);
@@ -105,8 +120,11 @@ function selectRecipe(id: string): void {
 
 function restoreSelection(): void {
     const saved = savedSelections.value[storageScope.value];
-    const current = saved?.recipe === selectedId.value ? saved.models : status.value?.recipe === selectedId.value ? status.value.models : {};
-    selection.value = Object.fromEntries((recipe.value?.slots || []).map((slot) => [slot.id, current[slot.id] || (slot.id === "tae" ? current.taesd : slot.id === "taesd" ? current.tae : "") || ""]));
+    const current = saved?.modelsByRecipe[selectedId.value] ?? (status.value?.recipe === selectedId.value ? status.value.models : {});
+    selection.value = Object.fromEntries((recipe.value?.slots || []).map((slot) => {
+        const value = current[slot.id] ?? (slot.id === "tae" ? current.taesd : slot.id === "taesd" ? current.tae : "") ?? "";
+        return [slot.id, filesForSlot(slot).some((file) => file.id === value) ? value : ""];
+    }));
 }
 
 async function refresh(rescan = true): Promise<void> {
@@ -181,13 +199,21 @@ async function poll(): Promise<void> {
 
 watch(selection, (value) => emit("selection", { ...value }), { deep: true });
 
-watch([selectedId, selection], () => {
+function saveSelection(): void {
     if (restorePending || !recipe.value || recipe.value.source === "command_line") return;
     savedSelections.value = {
         ...savedSelections.value,
-        [storageScope.value]: { recipe: selectedId.value, models: { ...selection.value } },
+        [storageScope.value]: {
+            recipe: selectedId.value,
+            modelsByRecipe: {
+                ...savedSelections.value[storageScope.value]?.modelsByRecipe,
+                [selectedId.value]: { ...selection.value },
+            },
+        },
     };
-}, { deep: true });
+}
+
+watch([selectedId, selection], saveSelection, { deep: true });
 
 watch(() => props.baseUrl, () => {
     revision++;

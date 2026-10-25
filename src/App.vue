@@ -1,16 +1,19 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, toRef, watch } from "vue";
 
+import PromptComposer from "./components/PromptComposer.vue";
+import ReferenceInputs from "./components/ReferenceInputs.vue";
+import brandSvg from "../icon-preview.svg?raw";
+import { dimensionError, sizeMultiple } from "./lib/resolution";
+import { useVideoLength } from "./lib/video-length";
 import CollapsibleSection from "./components/CollapsibleSection.vue";
 import ModelSelector from "./components/ModelSelector.vue";
 import SearchableSelect from "./components/SearchableSelect.vue";
-import ImageDropzone from "./components/ImageDropzone.vue";
 import MediaDropzone from "./components/MediaDropzone.vue";
 import StatusChip from "./components/StatusChip.vue";
 import { cancelJob, getCapabilities, getJob, submitImageJob, submitVideoJob } from "./lib/api";
 import { applyRecipeDefaults, buildRequestBodyForMode, createBlankForm, formFromCapabilities } from "./lib/form";
 import { availableCacheModes, featuresForMode, supportsEta, supportsFlowShift, usesSCM } from "./lib/generation-features";
-import { IMAGE_INPUTS, VIDEO_IMAGE_INPUTS } from "./lib/image-inputs";
 import { assignImageEntries, clearImageEntries, filesToImageEntries, removeImageEntry } from "./lib/images";
 import { createStoredRef, normalizePollIntervalMs, normalizePreviewInterval } from "./lib/settings";
 import { useLoraSelection } from "./lib/lora-selection";
@@ -30,19 +33,21 @@ import type {
     FormLoraEntry,
 } from "./lib/types";
 
+const brandIcon = `data:image/svg+xml,${encodeURIComponent(brandSvg)}`;
 const baseUrl = createStoredRef<string>("sdcpp-webui-base-url", "", (value: unknown) => String(value || ""));
 const pollIntervalMs = createStoredRef<number>("sdcpp-webui-poll-interval-ms", 100, normalizePollIntervalMs);
 const preferredPreviewMode = createStoredRef<string>("sdcpp-webui-preview-mode", "none", (value: unknown) => typeof value === "string" ? value : "none");
 const previewInterval = createStoredRef<number>("sdcpp-webui-preview-interval", 1, normalizePreviewInterval);
-const activeTab = ref<"image" | "video" | "settings">("image");
-const theme = useTheme();
-const selectedGenerationTab = ref<"image" | "video">("image");
-const generationMode = computed<GenerationMode>(() => selectedGenerationTab.value === "video" ? "video" : "image");
+const settingsOpen = ref(false);
+const { theme, resolvedTheme, toggleTheme } = useTheme();
+const themeToggleLabel = computed(() => resolvedTheme.value === "dark" ? "Switch to light mode" : "Switch to dark mode");
+const generationMode = ref<GenerationMode>("image");
 const lightboxOpen = ref(false);
+const generationDetails = ref<HTMLDialogElement | null>(null);
 const lightboxImageSrc = ref("");
 const lightboxImageAlt = ref("");
+let lightboxTrigger: HTMLElement | null = null;
 const sectionState = reactive<Record<string, boolean>>({
-    sample: true,
     sampleAdvanced: false,
     guidance: true,
     guidanceAdvanced: false,
@@ -50,7 +55,7 @@ const sectionState = reactive<Record<string, boolean>>({
     highNoiseSample: true,
     highNoiseGuidance: true,
     conditioning: false,
-    auxiliaryImages: false,
+    imageSettings: true,
     referenceMedia: true,
     cache: false,
 });
@@ -60,6 +65,7 @@ const serviceOnline = ref(false);
 const capabilities = ref<Capabilities | null>(null);
 const modelStatus = ref<ModelStatus | null>(null);
 const selectedRecipe = ref<Recipe | null>(null);
+const dimensionMultiple = computed(() => sizeMultiple(selectedRecipe.value?.size_multiple));
 const applyRecipeDefaultsOnSelect = createStoredRef<boolean>("sdcpp-webui-apply-recipe-defaults", true, (value: unknown) => typeof value === "boolean" ? value : true);
 const modelSelection = ref<Record<string, string>>({});
 const modelReady = computed(() => modelStatus.value ? modelStatus.value.state === "ready" : Boolean(capabilities.value?.model?.name));
@@ -70,6 +76,10 @@ const statusTone = ref("");
 const cancelling = ref(false);
 let pollVersion = 0;
 const form = reactive<GenerationForm>(createBlankForm());
+const videoConstraints = computed(() => selectedRecipe.value?.video_constraints);
+const videoLength = reactive(useVideoLength(form, videoConstraints));
+const composer = ref<InstanceType<typeof PromptComposer> | null>(null);
+const modeDrafts = new Map<GenerationMode, GenerationForm>();
 const videoInput = useMediaInput("video", toRef(form, "ref_video"));
 const audioInput = useMediaInput("audio", toRef(form, "ref_audio"));
 const submitting = ref(false);
@@ -86,19 +96,15 @@ const modelName = computed(() => {
 const supportedModes = computed(() => capabilities.value?.supported_modes || []);
 const loadedRecipeId = computed(() => modelStatus.value?.runtime_recipe?.id || modelStatus.value?.recipe);
 const loras = useLoraSelection(baseUrl, computed(() => selectedRecipe.value?.id || loadedRecipeId.value || undefined));
-const recipeMode = computed<GenerationMode>(() => selectedRecipe.value?.source === "command_line"
-    ? capabilities.value?.current_mode === "vid_gen" ? "video" : "image"
-    : selectedRecipe.value?.defaults?.video_frames !== undefined ? "video" : "image");
+const recipeMode = computed<GenerationMode>(() => {
+    if (selectedRecipe.value && selectedRecipe.value.source !== "command_line") {
+        return selectedRecipe.value.defaults?.video_frames !== undefined ? "video" : "image";
+    }
+    const mode = capabilities.value?.current_mode || (supportedModes.value.length === 1 ? supportedModes.value[0] : "img_gen");
+    return mode === "vid_gen" ? "video" : "image";
+});
 const previewingRecipe = computed(() => Boolean(selectedRecipe.value) &&
     (!modelReady.value || loadedRecipeId.value !== selectedRecipe.value?.id));
-const supportsImageMode = computed(() => {
-    if (previewingRecipe.value) return recipeMode.value === "image";
-    return modelReady.value && (!supportedModes.value.length || supportedModes.value.includes("img_gen"));
-});
-const supportsVideoMode = computed(() => {
-    if (previewingRecipe.value) return recipeMode.value === "video";
-    return modelReady.value && (!supportedModes.value.length || supportedModes.value.includes("vid_gen"));
-});
 const selectedModeKey = computed<"img_gen" | "vid_gen">(() => generationMode.value === "video" ? "vid_gen" : "img_gen");
 const canGenerate = computed(() => modelReady.value && !previewingRecipe.value &&
     (!supportedModes.value.length || supportedModes.value.includes(selectedModeKey.value)));
@@ -142,9 +148,14 @@ const sampleHasExtras = (sample: SampleParams): boolean => sampleHasEta(sample) 
 const hasGuidanceExtras = computed(() => hasFeature("img_cfg") || hasFeature("slg"));
 const hasConditioning = computed(() => ["clip_skip", "controlnet", "vace"].some(hasFeature));
 const cacheModes = computed(() => availableCacheModes(generationFeatures.value));
-const currentImageInputs = computed(() => (generationMode.value === "video" ? VIDEO_IMAGE_INPUTS : IMAGE_INPUTS).filter((input) => hasFeature(input.target)));
-const gridImageInputs = computed(() => currentImageInputs.value.filter((input) => input.layout === "grid"));
-const fullImageInputs = computed(() => currentImageInputs.value.filter((input) => input.layout === "full"));
+const recommendedDimensions = computed(() => {
+    const defaults = capabilities.value?.defaults_by_mode?.[selectedModeKey.value] || {};
+    const recipeDefaults = recipeMode.value === generationMode.value ? selectedRecipe.value?.defaults : undefined;
+    return {
+        width: recipeDefaults?.width ?? defaults.width ?? 512,
+        height: recipeDefaults?.height ?? defaults.height ?? 512,
+    };
+});
 const queueLimit = computed(() => capabilities.value?.limits?.max_queue_size ?? "unknown");
 const canCancelQueued = computed(() => Boolean(currentJobFeatures.value.cancel_queued));
 const canCancelGenerating = computed(() => Boolean(currentJobFeatures.value.cancel_generating));
@@ -263,20 +274,11 @@ const loraOptions = computed(() => [
     ...availableLoras.value.map((lora) => ({ value: lora.path, label: lora.display_path || lora.path })),
     ...[...new Set(loras.value.map((item) => item.path).filter((path) => path && !availableLoras.value.some((lora) => lora.path === path)))].map((path) => ({ value: path, label: `${path} (unavailable)` })),
 ]);
-const imageInputsSummary = computed(() => {
+const imageSettingsSummary = computed(() => {
     const parts: string[] = [];
-    if (hasFeature("init_image") && form.init_image) parts.push(generationMode.value === "video" ? "start" : "init");
-    if (generationMode.value === "image") {
-        if (hasFeature("mask_image") && form.mask_image) parts.push("mask");
-        if (hasFeature("control_image") && form.control_image) parts.push("control");
-        if (hasFeature("ip_adapter") && form.ip_adapter_image) parts.push("IP-Adapter");
-        if (hasFeature("ref_images") && form.ref_images.length) parts.push(`${form.ref_images.length} refs`);
-    } else {
-        if (hasFeature("end_image") && form.end_image) parts.push("end");
-        if (hasFeature("ref_images") && form.ref_images.length) parts.push(`${form.ref_images.length} refs`);
-        if (hasFeature("control_frames") && form.control_frames.length) parts.push(`${form.control_frames.length} frames`);
-    }
-    return parts.length ? parts.join(" · ") : "No images";
+    if (hasFeature("init_image") && hasFeature("img2img") && form.init_image) parts.push(`Denoising ${formatSummaryNumber(form.strength)}`);
+    if (hasFeature("ip_adapter_image")) parts.push(`IP-Adapter ${formatSummaryNumber(form.ip_adapter_strength)}`);
+    return parts.join(" · ");
 });
 const cacheSummary = computed(() => {
     const mode = form.cache.mode || "disabled";
@@ -345,12 +347,20 @@ function applyForm(nextForm: GenerationForm): void {
 }
 
 function updateCatalogRecipe(recipe: Recipe | null): void {
-    if (selectedRecipe.value) selectedRecipe.value = recipe;
+    if (selectedRecipe.value) {
+        selectedRecipe.value = recipe;
+        syncGenerationMode(recipeMode.value);
+    }
     else if (recipe && (recipe.source === "command_line" || (!modelReady.value && modelStatus.value?.state !== "loading"))) selectRecipe(recipe);
+    else if (recipe && recipe.id === loadedRecipeId.value) {
+        selectedRecipe.value = recipe;
+        syncGenerationMode(recipeMode.value);
+    }
 }
 
 function selectRecipe(recipe: Recipe): void {
     selectedRecipe.value = recipe;
+    syncGenerationMode(recipeMode.value);
     if (applyRecipeDefaultsOnSelect.value) {
         if (recipe.source === "command_line" && capabilities.value?.runtime?.origin === "command_line") {
             const defaults = formFromCapabilities(capabilities.value);
@@ -361,8 +371,7 @@ function selectRecipe(recipe: Recipe): void {
             applyRecipeDefaults(form, recipe.defaults);
         }
     }
-    selectedGenerationTab.value = recipeMode.value;
-    activeTab.value = recipeMode.value;
+    if (applyRecipeDefaultsOnSelect.value) videoLength.resetDuration();
     ensureOutputFormatForMode(recipeMode.value);
 }
 
@@ -376,25 +385,17 @@ async function refreshCapabilities(): Promise<void> {
         capabilities.value = response;
         if (response.runtime) modelStatus.value = response.runtime;
         serviceOnline.value = true;
+        syncGenerationMode(recipeMode.value);
         if (initializeForm) {
             const defaults = formFromCapabilities(response);
             defaults.prompt = form.prompt || defaults.prompt;
             defaults.negative_prompt = form.negative_prompt || defaults.negative_prompt;
             applyForm(defaults);
             if (selectedRecipe.value && applyRecipeDefaultsOnSelect.value) applyRecipeDefaults(form, selectedRecipe.value.defaults);
+            videoLength.resetDuration();
         }
         if (response.runtime?.runtime_recipe && (enteringCommandLine || !selectedRecipe.value)) {
             selectRecipe(response.runtime.runtime_recipe);
-        }
-        if (selectedGenerationTab.value === "image" && !supportsImageMode.value && supportsVideoMode.value) {
-            selectedGenerationTab.value = "video";
-        } else if (selectedGenerationTab.value === "video" && !supportsVideoMode.value && supportsImageMode.value) {
-            selectedGenerationTab.value = "image";
-        }
-        if (activeTab.value === "image" && !supportsImageMode.value && supportsVideoMode.value) {
-            activeTab.value = "video";
-        } else if (activeTab.value === "video" && !supportsVideoMode.value && supportsImageMode.value) {
-            activeTab.value = "image";
         }
         ensureOutputFormatForMode();
         clearMessage();
@@ -411,18 +412,21 @@ function toggleSection(section: string): void {
     sectionState[section] = !sectionState[section];
 }
 
-function selectGenerationMode(mode: GenerationMode): void {
-    if (mode === "image" && !supportsImageMode.value) {
-        setMessage("Current model only supports video generation.", "error");
-        return;
+function syncGenerationMode(mode: GenerationMode): void {
+    if (mode !== generationMode.value) {
+        modeDrafts.set(generationMode.value, { ...form });
+        const draft = modeDrafts.get(mode) || formFromCapabilities({ ...capabilities.value, current_mode: mode === "video" ? "vid_gen" : "img_gen" });
+        // Media decoding owns object URLs; keep video/audio references alive across mode switches.
+        Object.assign(form, draft, { ref_video: form.ref_video, ref_audio: form.ref_audio });
+        if (mode === "video" && !modeDrafts.has(mode)) videoLength.resetDuration();
     }
-    if (mode === "video" && !supportsVideoMode.value) {
-        setMessage("Current model only supports image generation.", "error");
-        return;
-    }
-    selectedGenerationTab.value = mode;
-    activeTab.value = mode;
+    generationMode.value = mode;
     ensureOutputFormatForMode(mode);
+}
+
+function openSettings(): void {
+    composer.value?.close();
+    settingsOpen.value = !settingsOpen.value;
 }
 
 function stopPolling(): void {
@@ -490,10 +494,14 @@ async function pollJob(id: string): Promise<void> {
 
 async function generate(): Promise<void> {
     if (!canGenerate.value || isJobRunning.value || mediaProcessing.value || submitting.value) return;
+    const invalidSize = dimensionError({ width: form.width, height: form.height }, capabilities.value?.limits, dimensionMultiple.value);
+    if (invalidSize) { setMessage(invalidSize, "error"); return; }
+    if (generationMode.value === "video" && videoLength.error) { setMessage(videoLength.error, "error"); return; }
     submitting.value = true;
     try {
         const request = buildRequestBodyForMode(generationMode.value, {
             ...form,
+            ...(generationMode.value === "video" ? { video_frames: videoLength.frames, fps: videoLength.fps } : {}),
             lora: loras.value.filter((item) => !loraInactiveReason(item)),
             preview_mode: previewMode.value,
             preview_interval: normalizePreviewInterval(previewInterval.value),
@@ -559,17 +567,19 @@ function clearImage(target: ImageTarget): void {
     clearImageEntries(form, target);
 }
 
-function getFormImage(target: ImageTarget): ImageEntry | null {
-    if (target === "ref_images" || target === "control_frames") return null;
-    return form[target];
-}
-
 function openImageEntry(image: ImageEntry | null): void {
     openLightbox(image?.dataUrl, image?.name);
 }
 
 function removeCollectionImage(target: "ref_images" | "control_frames", index: number): void {
     removeImageEntry(form, target, index);
+}
+
+async function replaceCollectionImage(target: "ref_images" | "control_frames", image: ImageEntry, files: FileList): Promise<void> {
+    if (!files.length) return;
+    const [replacement] = await filesToImageEntries([files[0]]);
+    const index = form[target].indexOf(image);
+    if (replacement && index >= 0) form[target].splice(index, 1, replacement);
 }
 
 function selectOutput(index: number): void {
@@ -616,30 +626,58 @@ function openLightbox(src: string | null | undefined = previewImageSrc.value, al
     if (!src) {
         return;
     }
+    lightboxTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    composer.value?.close();
     lightboxImageSrc.value = src;
     lightboxImageAlt.value = alt;
     lightboxOpen.value = true;
+    void nextTick(() => document.getElementById("lightbox-close")?.focus());
 }
 
 function closeLightbox(): void {
     lightboxOpen.value = false;
     lightboxImageSrc.value = "";
     lightboxImageAlt.value = "";
+    if (lightboxTrigger?.getClientRects().length) lightboxTrigger.focus();
+    else document.getElementById("generation-prompt")?.focus();
 }
 
 async function onPaste(event: ClipboardEvent): Promise<void> {
-    if (!event.clipboardData?.files?.length) {
+    if (!event.clipboardData?.files?.length || settingsOpen.value) return;
+    await acceptReferenceFiles(event.clipboardData.files);
+}
+
+function onReferenceDragover(event: DragEvent): void {
+    if (event.dataTransfer?.types.includes("Files") && (hasFeature("init_image") || hasFeature("ref_images"))) {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+    }
+}
+
+async function onReferenceDrop(event: DragEvent): Promise<void> {
+    if (event.defaultPrevented || !event.dataTransfer?.files.length) return;
+    event.preventDefault();
+    await acceptReferenceFiles(event.dataTransfer.files);
+}
+
+async function acceptReferenceFiles(files: FileList): Promise<void> {
+    const target = hasFeature("init_image") ? "init_image" : hasFeature("ref_images") ? "ref_images" : null;
+    if (!target) {
+        setMessage("The selected model does not support initial or reference images.", "error");
         return;
     }
-    await assignImages("init_image", event.clipboardData.files);
-    setMessage("Pasted image into init_image.", "success");
+    try {
+        await assignImages(target, files);
+    } catch (error) {
+        setMessage(error instanceof Error ? error.message : String(error), "error");
+    }
 }
 
 watch(baseUrl, () => { selectedRecipe.value = null; });
 
 watch(cacheModes, (modes) => { if (!modes.includes(form.cache.mode)) form.cache.mode = "disabled"; });
 watch(generationFeatures, (features) => {
-    if (!features.ref_video_audios) videoInput.setUseAudio(false);
+    if (generationMode.value === "video" && !features.ref_video_audios) videoInput.setUseAudio(false);
 });
 
 watch(generationMode, (mode) => {
@@ -667,34 +705,26 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-    <div class="shell">
-        <header class="page-header panel">
-            <div class="page-header__top">
-                <div class="page-header__copy">
-                    <div class="breadcrumb">
-                        <span class="breadcrumb__org">stable-diffusion.cpp</span>
-                        <span class="breadcrumb__slash">/</span>
-                        <span>{{ modelName }}</span>
-                    </div>
-                    <h1 class="page-title">{{ modelName }}</h1>
-                </div>
-                <div class="page-header__meta">
-                    <StatusChip :status="serviceOnline ? 'online' : 'offline'" :label="serviceOnline ? 'service online' : 'service unavailable'" />
-                    <StatusChip :label="`queue ${queueLimit}`" />
-                    <StatusChip :status="currentStatus" :label="currentStatus" />
-                </div>
+    <div class="shell studio-shell" :class="{ 'studio-shell--creating': !settingsOpen }">
+        <header class="studio-header">
+            <a class="studio-brand" href="#" aria-label="stable-diffusion.cpp home" @click.prevent="settingsOpen = false"><img class="studio-brand__mark" :src="brandIcon" alt="" /><span>stable-diffusion.cpp</span></a>
+            <div class="studio-header__actions">
+                <StatusChip :status="serviceOnline ? 'online' : 'offline'" :label="serviceOnline ? 'Online' : 'Offline'" />
+                <button class="btn-ghost studio-theme-toggle" type="button" :aria-label="themeToggleLabel" :title="themeToggleLabel" @click="toggleTheme">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                        <template v-if="resolvedTheme === 'dark'">
+                            <circle cx="12" cy="12" r="4" />
+                            <path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" />
+                        </template>
+                        <path v-else d="M20.9 13.3A9 9 0 0 1 10.7 3.1a9 9 0 1 0 10.2 10.2Z" />
+                    </svg>
+                </button>
+                <button class="btn-ghost" type="button" :aria-pressed="settingsOpen" @click="openSettings">Settings</button>
             </div>
-            <div class="page-tabs">
-                <div class="page-tabs__list">
-                    <button class="page-tab" :class="{ 'page-tab--active': activeTab === 'image' }" type="button" @click="selectGenerationMode('image')" :disabled="!supportsImageMode">Image Generation</button>
-                    <button class="page-tab" :class="{ 'page-tab--active': activeTab === 'video' }" type="button" @click="selectGenerationMode('video')" :disabled="!supportsVideoMode">Video Generation</button>
-                    <button class="page-tab" :class="{ 'page-tab--active': activeTab === 'settings' }" type="button" @click="activeTab = 'settings'">Settings</button>
-                </div>
-                <div class="page-tabs__actions">
-                    <button class="btn-secondary" type="button" @click="refreshCapabilities" :disabled="loadingCapabilities">{{ loadingCapabilities ? "Refreshing..." : "Refresh Server Info" }}</button>
-                </div>
-            </div>
-            <div v-if="activeTab === 'settings'" class="settings">
+        </header>
+        <section v-if="settingsOpen" class="studio-settings panel" aria-label="Settings">
+            <div class="settings-heading"><h1>Settings</h1><button class="btn-secondary" type="button" @click="refreshCapabilities" :disabled="loadingCapabilities">{{ loadingCapabilities ? 'Refreshing…' : 'Refresh server info' }}</button></div>
+            <div class="settings">
                 <div class="settings__grid">
                     <div class="field">
                         <label for="theme">Theme</label>
@@ -749,7 +779,8 @@ onBeforeUnmount(() => {
                         The selected preview mode is unavailable for the current model configuration. Preview will be disabled; your preference is saved.
                     </div>
                 </fieldset>
-                <fieldset class="settings__group" :disabled="!hasFeature('vae_tiling')">
+
+                <fieldset v-if="hasFeature('vae_tiling')" class="settings__group stack-top">
                     <legend>VAE Tiling</legend>
                     <label class="checkbox"><input v-model="form.vae_tiling_params.enabled" type="checkbox" /><span>Enabled</span></label>
                     <div class="settings__grid stack-top">
@@ -774,14 +805,86 @@ onBeforeUnmount(() => {
                             <input id="vae-tile-relative-height" v-model.number="form.vae_tiling_params.rel_size_h" type="number" step="0.01" :disabled="!form.vae_tiling_params.enabled" />
                         </div>
                     </div>
-                    <div v-if="!hasFeature('vae_tiling')" class="hint stack-top">Select a model configuration that supports VAE tiling to use these settings.</div>
                 </fieldset>
                 <div v-if="capabilitiesError" class="status-message status-message--error">{{ capabilitiesError }}</div>
             </div>
-        </header>
+        </section>
+        <main v-show="!settingsOpen" class="studio-workspace">
+            <section class="output-stage" aria-label="Generated output" @dragover="onReferenceDragover" @drop="onReferenceDrop">
+                <div v-if="livePreviewSrc" class="hero-frame hero-frame--media hero-frame--preview">
+                    <img class="hero-frame__image" :src="livePreviewSrc" alt="Live preview" />
+                    <div class="hero-frame__preview-overlay">
+                        <span class="hero-frame__preview-label">Preview</span>
+                        <span class="hero-frame__preview-step">Pass {{ livePreviewPass }} · {{ livePreviewStep }} / {{ livePreviewTotalSteps }} steps</span>
+                    </div>
+                </div>
+                <div v-else-if="videoPreviewSrc" class="hero-frame hero-frame--media">
+                    <video class="hero-frame__video" :src="videoPreviewSrc" controls autoplay loop muted playsinline />
+                </div>
+                <button v-else-if="previewImageSrc" class="hero-frame hero-frame--button" type="button" @click="openLightbox(previewImageSrc, 'Generated output')">
+                    <img :src="previewImageSrc" alt="Generated output" />
+                </button>
+                <div v-else class="hero-frame hero-frame--empty">
+                    <div v-if="!modelReady || previewingRecipe" class="hero-placeholder hero-placeholder--model">
+                        <div aria-live="polite">
+                            <h2>{{ modelStatus?.state === 'loading' ? 'Loading your model' : 'Choose a model to get started' }}</h2>
+                            <p>{{ modelStatus?.state === 'loading'
+                                ? 'Your model is loading. You can prepare your prompt while you wait.'
+                                : 'Select a recipe and load its model, then bring your ideas to life.' }}</p>
+                        </div>
+                        <button class="btn model-start-action" type="button" aria-haspopup="dialog" aria-controls="composer-panel" @click="composer?.openModels($event)">{{ modelStatus?.state === 'loading' ? 'View loading status' : 'Choose & load model' }}</button>
+                    </div>
+                    <div v-else class="hero-placeholder">
+                        <h2>{{ generationMode === "video" ? "Imagine it in motion" : "Make room for imagination" }}</h2>
+                        <p>
+                            {{ generationMode === "video"
+                                ? "Describe a scene below, add a reference, and create your next video."
+                                : "Start with a few words. Your next image will appear here." }}
+                        </p>
+                    </div>
+                </div>
 
-        <ModelSelector v-model:apply-defaults="applyRecipeDefaultsOnSelect" :base-url="baseUrl" :busy="isJobRunning" :lora-summary="loraSummary" @status="modelStatus = $event" @changed="refreshCapabilities" @recipe="selectRecipe" @selection="modelSelection = $event" @catalog-recipe="updateCatalogRecipe">
-            <template #lora>
+                <div v-if="currentJob" class="stage-footer">
+                    <div class="stage-status">
+                        <StatusChip :status="currentStatus" :label="currentJob.cancel_requested && isJobRunning ? 'Cancelling' : currentStatus" />
+                        <span>{{ formatElapsed(currentJob) }}</span>
+                        <span v-if="currentStatus === 'queued'">Queue {{ currentJob.queue_position ?? 0 }}</span>
+                        <span v-if="livePreviewSrc">{{ livePreviewStep }} / {{ livePreviewTotalSteps }} steps</span>
+                    </div>
+                    <div class="stage-actions">
+                        <button class="btn-ghost" type="button" aria-haspopup="dialog" @click="generationDetails?.showModal()">Details</button>
+                        <button v-if="downloadableSrc" class="btn-secondary" type="button" @click="downloadSelected">Download</button>
+                    </div>
+                </div>
+
+                <div v-if="statusMessage && statusTone !== 'success'" class="status-message stage-message" role="status" :class="statusTone === 'error' ? 'status-message--error' : ''">{{ statusMessage }}</div>
+                <div v-else-if="currentJob?.error?.message" class="status-message status-message--error stage-message" role="alert">{{ currentJob.error.message }}</div>
+
+                <div v-if="currentImages.length > 1" class="thumb-row">
+                    <button v-for="(image, index) in currentImages" :key="image.index" class="thumb" :class="{ 'thumb--active': index === selectedOutputIndex }" type="button" @click="selectOutput(index)">
+                        <img :src="`data:image/${currentJob?.result?.output_format || 'png'};base64,${image.b64_json}`" :alt="`Output ${index + 1}`" />
+                    </button>
+                </div>
+            </section>
+            <PromptComposer ref="composer" :form="form" :mode="generationMode" :model-label="selectedRecipe?.name || (modelReady ? modelName : 'Choose model')"
+                :model-ready="canGenerate" :disabled="!canGenerate || mediaProcessing || submitting || (generationMode === 'video' && Boolean(videoLength.error))" :busy="isJobRunning"
+                :video-summary="videoLength.summary" :video-details="videoLength.details"
+                :can-cancel="canCancelCurrentJob" :cancelling="cancelling || Boolean(currentJob?.cancel_requested)"
+                :has-loras="showLoras" :lora-count="loras.filter(item => item.path).length"
+                :limits="capabilities?.limits" :size-multiple="dimensionMultiple" :recommended="recommendedDimensions" @generate="generate" @cancel="cancelCurrentJob"
+                @dragover="onReferenceDragover" @drop="onReferenceDrop">
+                <template #inputs>
+                    <ReferenceInputs :form="form" :mode="generationMode" :features="generationFeatures"
+                        @select-image="assignImages" @clear-image="clearImage" @remove-image="removeCollectionImage" @replace-image="replaceCollectionImage" @preview="openImageEntry"
+                        @select-media="(kind, files) => kind === 'video' ? videoInput.select(files) : audioInput.select(files)"
+                        @clear-media="kind => kind === 'video' ? videoInput.clear() : audioInput.clear()" @preview-media="sectionState.referenceMedia = true; composer?.openMore($event)" />
+                </template>
+                <template #models>
+        <ModelSelector embedded v-model:apply-defaults="applyRecipeDefaultsOnSelect" :base-url="baseUrl" :busy="isJobRunning" :lora-summary="loraSummary" @status="modelStatus = $event" @changed="refreshCapabilities" @recipe="selectRecipe" @selection="modelSelection = $event" @catalog-recipe="updateCatalogRecipe">
+        </ModelSelector>
+                </template>
+                <template #lora>
+
                 <section v-if="showLoras" class="model-loras" aria-labelledby="model-loras-title">
                     <div>
                         <h3 id="model-loras-title" class="model-loras__title">LoRAs <span>Optional</span></h3>
@@ -791,10 +894,10 @@ onBeforeUnmount(() => {
                     <div v-for="(item, index) in loras" :key="index" class="lora-row" :class="{ 'lora-row--high-noise': showLoraHighNoise }">
                         <div class="field">
                             <label :for="'lora-' + index">LoRA {{ index + 1 }}</label>
-                            <SearchableSelect :id="'lora-' + index" v-model="item.path" :aria-label="'LoRA ' + (index + 1)" :options="loraOptions" placeholder="Select a LoRA" />
+                            <SearchableSelect :id="'lora-' + index" v-model="item.path" :aria-label="'LoRA ' + (index + 1)" :options="loraOptions" placeholder="Select a LoRA" contained />
                         </div>
                         <div class="field">
-                            <label :for="'lora-multiplier-' + index">Multiplier</label>
+                            <label :for="'lora-multiplier-' + index">Strength</label>
                             <input :id="'lora-multiplier-' + index" v-model.number="item.multiplier" type="number" step="0.1" />
                         </div>
                         <div v-if="showLoraHighNoise" class="field">
@@ -811,35 +914,11 @@ onBeforeUnmount(() => {
                         <button class="btn-secondary" type="button" @click="addLora" :disabled="!hasFeature('lora') || !availableLoras.length">Add LoRA</button>
                     </div>
                 </section>
-            </template>
-        </ModelSelector>
 
-        <div v-if="activeTab !== 'settings'" class="layout">
-            <section class="panel control-panel">
-                <div class="panel-header">
-                    <div>
-                        <h2 class="panel-title">Input</h2>
-                    </div>
-                </div>
-
-                <div class="prompt-card">
-                    <div class="field--full">
-                        <label>Prompt</label>
-                        <textarea v-model="form.prompt" :placeholder="generationMode === 'video' ? 'Describe the motion, scene, and framing you want to generate' : 'Describe the image you want to generate'" />
-                    </div>
-                    <div class="field--full stack-top">
-                        <label>Negative Prompt</label>
-                        <textarea v-model="form.negative_prompt" placeholder="What should be excluded?" />
-                    </div>
-                </div>
-
-                <div class="fields stack-top">
-                    <div class="field"><label>Width</label><input v-model.number="form.width" type="number" min="64" /></div>
-                    <div class="field"><label>Height</label><input v-model.number="form.height" type="number" min="64" /></div>
-                </div>
-
+                </template>
+                <template #output>
                 <div v-if="generationMode === 'image'" class="fields stack-top">
-                    <div class="field"><label>Batch Count</label><input v-model.number="form.batch_count" type="number" min="1" /></div>
+                    <div class="field"><label>Number of Images</label><input v-model.number="form.batch_count" type="number" min="1" /></div>
                     <div class="field">
                         <label for="image-seed">Seed</label>
                         <div class="seed-input">
@@ -848,19 +927,40 @@ onBeforeUnmount(() => {
                         </div>
                     </div>
                 </div>
-                <div v-else class="fields stack-top">
-                    <div class="field"><label>Video Frames</label><input v-model.number="form.video_frames" type="number" min="1" /></div>
-                    <div class="field"><label>FPS</label><input v-model.number="form.fps" type="number" min="1" /></div>
-                </div>
-                <div v-if="generationMode === 'video'" class="field stack-top">
-                    <label for="video-seed">Seed</label>
-                    <div class="seed-input">
-                        <input id="video-seed" v-model.number="form.seed" type="number" />
-                        <button class="btn-secondary" type="button" title="Generate a random seed" @click="randomizeSeed">Random</button>
+                <div v-else>
+                    <div class="video-length-modes" role="group" aria-label="Video length input">
+                        <button type="button" :aria-pressed="videoLength.mode === 'frames'" @click="videoLength.setMode('frames')">Frames</button>
+                        <button type="button" :aria-pressed="videoLength.mode === 'duration'" @click="videoLength.setMode('duration')">Duration</button>
                     </div>
+                    <div v-if="videoLength.mode === 'frames'" class="field stack-top">
+                        <label for="video-frames">Frames</label>
+                        <input id="video-frames" v-model.number="form.video_frames" type="number" min="1" max="4096" step="1" />
+                    </div>
+                    <div v-else class="field stack-top">
+                        <label for="video-duration">Duration (seconds)</label>
+                        <input id="video-duration" v-model.number="videoLength.duration" type="number" min="0" :max="4096 / videoLength.fps" step="any" />
+                    </div>
+                    <p v-if="videoLength.error" class="status-message status-message--error" role="alert">{{ videoLength.error }}</p>
+                    <p v-else class="hint" aria-live="polite">{{ videoLength.frames }} frames · ≈{{ Number(videoLength.seconds.toFixed(3)) }} seconds after alignment</p>
+                    <div class="fields stack-top">
+                        <div class="field">
+                            <label for="video-fps">FPS</label>
+                            <input id="video-fps" v-model.number="videoLength.fps" type="number" min="1" max="240" step="1" :disabled="Boolean(videoConstraints?.fixed_fps)" />
+                            <span v-if="videoConstraints?.fixed_fps" class="hint">Fixed by this recipe</span>
+                        </div>
+                        <div class="field">
+                            <label for="video-seed">Seed</label>
+                            <div class="seed-input">
+                                <input id="video-seed" v-model.number="form.seed" type="number" />
+                                <button class="btn-secondary" type="button" title="Generate a random seed" @click="randomizeSeed">Random</button>
+                            </div>
+                        </div>
+                    </div>
+                    <p class="hint">Estimated playback length. Audio-driven generation or temporal upscaling may change the final length.</p>
                 </div>
-
-                <CollapsibleSection class="stack-top" eyebrow="Sample" :summary="sampleSummary" :open="sectionState.sample" variant="module" @toggle="toggleSection('sample')">
+                </template>
+                <template #sample>
+                    <p class="hint">{{ sampleSummary }}</p>
                     <div class="fields">
                         <div class="field">
                             <label>Scheduler</label>
@@ -888,8 +988,6 @@ onBeforeUnmount(() => {
                         <div v-if="sampleHasEta(form.sample_params)" class="field"><label>Eta</label><input v-model="form.sample_params.eta" type="number" step="0.01" placeholder="blank = default" /></div>
                         <div v-if="hasFeature('shifted_timestep')" class="field"><label>Shifted Timestep</label><input v-model.number="form.sample_params.shifted_timestep" type="number" /></div>
                     </div>
-                </CollapsibleSection>
-
                 <CollapsibleSection class="stack-top" eyebrow="Guidance" :summary="guidanceSummary" :open="sectionState.guidance" variant="module" @toggle="toggleSection('guidance')">
                     <div class="fields">
                         <div class="field"><label>CFG Scale</label><input v-model.number="form.sample_params.guidance.txt_cfg" type="number" step="0.1" /></div>
@@ -949,118 +1047,33 @@ onBeforeUnmount(() => {
                     </CollapsibleSection>
                 </CollapsibleSection>
 
+                </template>
+                <template #advanced>
+                <CollapsibleSection v-if="(hasFeature('init_image') && hasFeature('img2img') && form.init_image) || hasFeature('ip_adapter_image')" class="stack-top" eyebrow="Image Settings" :summary="imageSettingsSummary" :open="sectionState.imageSettings" @toggle="toggleSection('imageSettings')">
+                    <div class="fields">
+                        <div v-if="hasFeature('init_image') && hasFeature('img2img') && form.init_image" class="field">
+                            <label for="denoising-strength">Denoising Strength</label>
+                            <input id="denoising-strength" v-model.number="form.strength" type="number" min="0" max="1" step="0.01" />
+                            <div class="hint">Lower values preserve more of the initial image; higher values allow larger changes.</div>
+                        </div>
+                        <div v-if="hasFeature('ip_adapter_image')" class="field">
+                            <label for="ip-adapter-strength">IP-Adapter Strength</label>
+                            <input id="ip-adapter-strength" v-model.number="form.ip_adapter_strength" type="number" min="0" step="0.01" />
+                        </div>
+                    </div>
+                </CollapsibleSection>
+
+                <CollapsibleSection v-if="(hasFeature('ref_videos') && form.ref_video) || (hasFeature('ref_audios') && form.ref_audio)" class="stack-top" eyebrow="Reference Media" :summary="mediaSummary" :open="sectionState.referenceMedia" @toggle="toggleSection('referenceMedia')">
+                    <MediaDropzone v-if="hasFeature('ref_videos') && form.ref_video" kind="video" :entry="form.ref_video" :allow-soundtrack="hasFeature('ref_video_audios')" @select="videoInput.select" @clear="videoInput.clear" @soundtrack="videoInput.setUseAudio" />
+                    <MediaDropzone v-if="hasFeature('ref_audios') && form.ref_audio" kind="audio" :entry="form.ref_audio" @select="audioInput.select" @clear="audioInput.clear" />
+                </CollapsibleSection>
+
                 <CollapsibleSection v-if="hasConditioning" class="stack-top" eyebrow="Conditioning" :summary="conditioningSummary" :open="sectionState.conditioning" @toggle="toggleSection('conditioning')">
                     <div class="fields">
                         <div v-if="hasFeature('clip_skip')" class="field"><label>CLIP Skip</label><input v-model.number="form.clip_skip" type="number" /></div>
                         <div v-if="hasFeature('controlnet')" class="field"><label>Control Strength</label><input v-model.number="form.control_strength" type="number" step="0.01" /></div>
                         <div v-if="hasFeature('vace')" class="field"><label>VACE Strength</label><input v-model.number="form.vace_strength" type="number" step="0.01" /></div>
                     </div>
-                </CollapsibleSection>
-
-                <CollapsibleSection v-if="currentImageInputs.length || hasFeature('ref_images') || hasFeature('control_frames')" class="stack-top" eyebrow="Image Inputs" :summary="imageInputsSummary" :open="sectionState.auxiliaryImages" @toggle="toggleSection('auxiliaryImages')">
-                    <div v-if="gridImageInputs.length" class="upload-grid">
-                        <div v-for="input in gridImageInputs" :key="input.target" class="group">
-                            <ImageDropzone
-                                :label="input.label"
-                                :description="input.description"
-                                :preview="getFormImage(input.target)"
-                                @select="assignImages(input.target, $event)"
-                                @clear="clearImage(input.target)"
-                                @preview="openImageEntry($event)"
-                            />
-                            <div v-if="input.target === 'init_image' && hasFeature('img2img') && form.init_image" class="field">
-                                <label for="denoising-strength">Denoising Strength</label>
-                                <input id="denoising-strength" v-model.number="form.strength" type="number" min="0" max="1" step="0.01" />
-                                <div class="hint">Lower values preserve more of the initial image; higher values allow larger changes.</div>
-                            </div>
-                        </div>
-                    </div>
-                    <div v-for="input in fullImageInputs" :key="input.target">
-                        <ImageDropzone
-                            :label="input.label"
-                            :description="input.description"
-                            :preview="getFormImage(input.target)"
-                            @select="assignImages(input.target, $event)"
-                            @clear="clearImage(input.target)"
-                            @preview="openImageEntry($event)"
-                        />
-                        <div v-if="input.target === 'ip_adapter_image'" class="field stack-top">
-                            <label for="ip-adapter-strength">IP-Adapter Strength</label>
-                            <input id="ip-adapter-strength" v-model.number="form.ip_adapter_strength" type="number" min="0" step="0.01" />
-                        </div>
-                    </div>
-
-                    <div v-if="generationMode === 'image' && hasFeature('ref_images')" class="group">
-                        <label>Reference Images</label>
-                        <ImageDropzone
-                            label="Reference Images"
-                            description="Multiple reference images supported."
-                            :items="form.ref_images"
-                            multiple
-                            @select="assignImages('ref_images', $event)"
-                            @clear="clearImage('ref_images')"
-                        />
-                        <div v-if="!form.ref_images.length" class="hint">No files selected.</div>
-                        <div v-else class="file-list">
-                            <div v-for="(item, index) in form.ref_images" :key="item.name + index" class="file-chip file-chip--preview">
-                                <button class="file-chip__thumb-button" type="button" @click="openLightbox(item.dataUrl, item.name)">
-                                    <img class="file-chip__thumb" :src="item.dataUrl" :alt="item.name" />
-                                </button>
-                                <span class="file-chip__name">{{ item.name }}</span>
-                                <button class="icon-button" type="button" @click="removeCollectionImage('ref_images', index)">Remove</button>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div v-if="generationMode === 'video'">
-                        <div v-if="hasFeature('ref_images')" class="group">
-                            <label>Reference Images</label>
-                            <ImageDropzone
-                                label="Reference Images"
-                                description="Only MiniMax-H3 Ref2VA uses these images; other video models ignore them. Cannot be combined with an initial or end frame."
-                                :items="form.ref_images"
-                                multiple
-                                @select="assignImages('ref_images', $event)"
-                                @clear="clearImage('ref_images')"
-                            />
-                            <div v-if="!form.ref_images.length" class="hint">No files selected.</div>
-                            <div v-else class="file-list">
-                                <div v-for="(item, index) in form.ref_images" :key="item.name + index" class="file-chip file-chip--preview">
-                                    <button class="file-chip__thumb-button" type="button" @click="openLightbox(item.dataUrl, item.name)">
-                                        <img class="file-chip__thumb" :src="item.dataUrl" :alt="item.name" />
-                                    </button>
-                                    <span class="file-chip__name">{{ item.name }}</span>
-                                    <button class="icon-button" type="button" @click="removeCollectionImage('ref_images', index)">Remove</button>
-                                </div>
-                            </div>
-                        </div>
-                        <div v-if="hasFeature('control_frames')" class="group stack-top">
-                            <label>Control Frames</label>
-                            <ImageDropzone
-                                label="Control Frames"
-                                description="Upload ordered conditioning frames. The server preserves the array order."
-                                :items="form.control_frames"
-                                multiple
-                                @select="assignImages('control_frames', $event)"
-                                @clear="clearImage('control_frames')"
-                            />
-                            <div v-if="!form.control_frames.length" class="hint">No files selected.</div>
-                            <div v-else class="file-list">
-                                <div v-for="(item, index) in form.control_frames" :key="item.name + index" class="file-chip file-chip--preview">
-                                    <button class="file-chip__thumb-button" type="button" @click="openLightbox(item.dataUrl, item.name)">
-                                        <img class="file-chip__thumb" :src="item.dataUrl" :alt="item.name" />
-                                    </button>
-                                    <span class="file-chip__name">{{ item.name }}</span>
-                                    <button class="icon-button" type="button" @click="removeCollectionImage('control_frames', index)">Remove</button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </CollapsibleSection>
-
-                <CollapsibleSection v-if="hasFeature('ref_videos') || hasFeature('ref_audios')" class="stack-top" eyebrow="Reference Media" :summary="mediaSummary" :open="sectionState.referenceMedia" @toggle="toggleSection('referenceMedia')">
-                    <MediaDropzone v-if="hasFeature('ref_videos')" kind="video" :entry="form.ref_video" :allow-soundtrack="hasFeature('ref_video_audios')" @select="videoInput.select" @clear="videoInput.clear" @soundtrack="videoInput.setUseAudio" />
-                    <MediaDropzone v-if="hasFeature('ref_audios')" kind="audio" :entry="form.ref_audio" @select="audioInput.select" @clear="audioInput.clear" />
                 </CollapsibleSection>
 
                 <CollapsibleSection v-if="hasFeature('cache')" class="stack-top" eyebrow="Cache" :summary="cacheSummary" :open="sectionState.cache" @toggle="toggleSection('cache')">
@@ -1074,41 +1087,17 @@ onBeforeUnmount(() => {
                     <div v-if="usesSCM(form.cache.mode)" class="field"><label>SCM Mask</label><input v-model="form.cache.scm_mask" /></div>
                     <label v-if="usesSCM(form.cache.mode)" class="checkbox"><input v-model="form.cache.scm_policy_dynamic" type="checkbox" /><span>Dynamic SCM Policy</span></label>
                 </CollapsibleSection>
-            </section>
 
-            <section class="panel output-panel">
-                <div class="panel-header">
-                    <div>
-                        <h2 class="panel-title">Output</h2>
-                    </div>
-                </div>
 
-                <div v-if="livePreviewSrc" class="hero-frame hero-frame--media hero-frame--preview">
-                    <img class="hero-frame__image" :src="livePreviewSrc" alt="Live preview" />
-                    <div class="hero-frame__preview-overlay">
-                        <span class="hero-frame__preview-label">Preview</span>
-                        <span class="hero-frame__preview-step">Pass {{ livePreviewPass }} · {{ livePreviewStep }} / {{ livePreviewTotalSteps }} steps</span>
-                    </div>
-                </div>
-                <div v-else-if="videoPreviewSrc" class="hero-frame hero-frame--media">
-                    <video class="hero-frame__video" :src="videoPreviewSrc" controls autoplay loop muted playsinline />
-                </div>
-                <button v-else class="hero-frame hero-frame--button" type="button" :disabled="!previewImageSrc" @click="openLightbox(previewImageSrc, 'Generated output')">
-                    <img v-if="previewImageSrc" :src="previewImageSrc" alt="Generated output" />
-                    <div v-else class="hero-placeholder">
-                        <h2>{{ generationMode === "video" ? "Generate Video" : "Generate Images" }}</h2>
-                        <p>
-                            {{ generationMode === "video"
-                                ? "Generated video or animated WebP output will appear here once the current job finishes."
-                                : "Generated images will appear here once the current job finishes." }}
-                        </p>
-                    </div>
-                </button>
-
-                <div v-if="currentJobKind === 'vid_gen' && currentJob?.result?.output_format === 'avi'" class="hint stack-top">
-                    Browser playback for AVI depends on codec support. Download the file if the preview cannot play.
-                </div>
-
+                </template>
+            </PromptComposer>
+        </main>
+        <dialog ref="generationDetails" class="generation-details" aria-labelledby="generation-details-title">
+            <div class="generation-details__header">
+                <h2 id="generation-details-title">Generation details</h2>
+                <form method="dialog"><button class="btn-ghost" autofocus>Close</button></form>
+            </div>
+            <div v-if="currentJob" class="generation-details__body">
                 <div class="metrics output-metrics">
                     <div class="metric">
                         <div class="metric__label">Status</div>
@@ -1135,29 +1124,12 @@ onBeforeUnmount(() => {
                         <div class="metric__value">{{ videoFrameCount || "-" }}</div>
                     </div>
                 </div>
-
-                <div v-if="statusMessage" class="status-message" :class="statusTone === 'error' ? 'status-message--error' : 'status-message--success'">{{ statusMessage }}</div>
-                <div v-else-if="currentJob?.error?.message" class="status-message status-message--error">{{ currentJob.error.message }}</div>
-
-                <div class="output-controls">
-                    <button class="btn output-controls__primary" type="button" :disabled="isJobRunning || !canGenerate || mediaProcessing || submitting" @click="generate">
-                        {{ generationMode === "video" ? "Generate Video" : "Generate Image" }}
-                    </button>
-                    <div class="actions output-controls__secondary">
-                        <button class="btn-secondary" type="button" :disabled="!downloadableSrc" @click="downloadSelected">Download</button>
-                        <button class="btn-danger" type="button" :disabled="!canCancelCurrentJob" @click="cancelCurrentJob">{{ cancelling || (isJobRunning && currentJob?.cancel_requested) ? "Cancelling…" : "Cancel" }}</button>
-                    </div>
-                </div>
-
-                <div v-if="currentImages.length > 1" class="thumb-row">
-                    <button v-for="(image, index) in currentImages" :key="image.index" class="thumb" :class="{ 'thumb--active': index === selectedOutputIndex }" type="button" @click="selectOutput(index)">
-                        <img :src="`data:image/${currentJob?.result?.output_format || 'png'};base64,${image.b64_json}`" :alt="`Output ${index + 1}`" />
-                    </button>
-                </div>
-            </section>
-        </div>
-        <div v-if="lightboxOpen && lightboxImageSrc" class="lightbox" @click.self="closeLightbox">
-            <button class="lightbox__close" type="button" @click="closeLightbox">Close</button>
+                <p v-if="currentJobKind === 'vid_gen' && currentJob.result?.output_format === 'avi'" class="hint">Browser playback for AVI depends on codec support. Download the file if the preview cannot play.</p>
+                <p v-if="statusMessage" class="hint">{{ statusMessage }}</p>
+            </div>
+        </dialog>
+        <div v-if="lightboxOpen && lightboxImageSrc" class="lightbox" role="dialog" aria-modal="true" aria-label="Expanded image" @click.self="closeLightbox" @keydown.esc.stop.prevent="closeLightbox" @keydown.tab.prevent>
+            <button id="lightbox-close" class="lightbox__close" type="button" @click="closeLightbox">Close</button>
             <img class="lightbox__image" :src="lightboxImageSrc" :alt="lightboxImageAlt" />
         </div>
     </div>

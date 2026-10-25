@@ -155,6 +155,10 @@ export interface Capabilities {
   preview_modes?: string[];
   limits?: {
     max_queue_size?: number;
+    min_width?: number;
+    max_width?: number;
+    min_height?: number;
+    max_height?: number;
   };
   features?: {
     cancel_queued?: boolean;
@@ -245,11 +249,21 @@ export interface RecipeDefaults {
   high_noise_sampling_method?: string;
   high_noise_scheduler?: string;
 }
+export interface VideoConstraints {
+  frame_step?: number;
+  frame_offset?: number;
+  frame_rounding?: "floor" | "ceil";
+  min_frames?: number;
+  max_frames?: number;
+  fixed_fps?: number;
+}
 export interface Recipe {
   id: string;
   name: string;
   description?: string;
   model_url?: string;
+  size_multiple?: number;
+  video_constraints?: VideoConstraints;
   required_any?: string[][];
   source: "builtin" | "user" | "command_line";
   defaults?: RecipeDefaults;

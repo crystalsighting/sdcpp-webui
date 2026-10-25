@@ -19,20 +19,58 @@ It is designed for two use cases:
 
 The current UI supports:
 
-- image generation and video generation mode switching
+- automatic image/video generation mode selection from the selected recipe
 - prompt and negative prompt editing
 - width, height, seed, batch count, video frames, and fps
 - sampler and scheduler selection
 - guidance controls, including the video high-noise stage
 - conditioning controls such as `clip_skip`, `strength`, `control_strength`, `moe_boundary`, and `vace_strength`
-- LoRA rows integrated into Models, with counts in the Models summary; selections, multipliers, and high-noise targets are saved locally per server and recipe, and unavailable entries are retained but excluded from generation
+- a dedicated LoRA button with a selection count; selections, multipliers, and high-noise targets are saved locally per server and recipe, and unavailable entries are retained but excluded from generation
 - init image, end image, mask image, control image, control frames, and reference images
 - original reference video and audio file inputs, with browser-side decoding and optional video soundtrack conditioning
 - VAE tiling controls
 - cache controls
 - job polling, cancellation, image preview, and video or animated WebP preview
 - live preview mode and step interval always available in Settings, even before selecting a recipe, and saved locally; unsupported modes temporarily fall back to disabled without overwriting the saved preference
-- light and dark themes in Settings, defaulting to Device (follow the system theme); the choice is saved locally and system theme changes apply immediately
+- light and dark themes with a header icon shortcut and a Device (follow system) option in Settings; the choice is saved locally and system theme changes apply immediately
+
+## Creation Workspace
+
+The workspace uses a central output stage and a bottom prompt composer.
+Selecting a recipe determines whether to generate images or video; command-line
+models use the server's reported mode. Buttons below the prompt open model selection, LoRAs, a combined
+aspect-ratio and resolution panel, output options, reference inputs, a dedicated
+Sample & Guidance panel, and advanced settings. The sample panel also contains
+high-noise sampling and guidance when supported. The LoRA button sits beside the model button.
+Settings contains output format, output compression, VAE tiling, connection,
+theme, polling, and live-preview preferences.
+On desktop, the preview fits the space above the composer within the viewport.
+Generation status and result actions share a compact row; Details opens a dialog,
+and batch thumbnails scroll horizontally. Small or short windows allow page
+scrolling so the preview and composer remain accessible.
+Negative Prompt sits below Prompt and can be collapsed even when filled. Its
+collapsed row shows a single-line text preview; collapsing preserves the prompt
+used for generation. The expanded state is saved locally, and Clear removes the
+text. The editor grows from two to four lines before scrolling internally.
+When CFG Scale equals 1, the Negative Prompt section is hidden without clearing
+its text or saved expansion state.
+
+- **Aspect Ratio** offers common ratio presets. Changing the
+  ratio preserves the image pixel budget or the video's short-edge resolution.
+- **Resolution** offers model defaults, image pixel-budget tiers, and video
+  short-edge tiers (480p, 720p, 1080p), plus direct width/height entry, a ratio
+  lock, and width/height swapping. Use **Exact dimensions** with the ratio
+  unlocked for custom proportions. Exact entry switches to Custom. The UI
+  rounds presets up to the recipe's `size_multiple` (default `8`, including when
+  no recipe is selected). Manual dimensions must satisfy this increment and
+  server limits; a correction button offers the next valid aligned size.
+- Image and video drafts, including prompts, sizes, and image inputs, remain
+  separate for the current page session and restore when a recipe changes the
+  generation mode. Selecting a recipe still applies its
+  defaults when **Apply recipe defaults** is enabled.
+- Use **Ctrl+Enter** or **Cmd+Enter** from the prompt to generate. Configuration
+  panels support Escape, focus return, and keyboard navigation. On small screens
+  they open as bottom sheets.
 
 ## Requirements
 

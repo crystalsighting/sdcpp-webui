@@ -6,7 +6,7 @@ import { createStoredRef } from "../lib/settings";
 import { getModelFiles, getModelStatus, getRecipes, loadModel, refreshModels, unloadModel } from "../lib/api";
 import type { CatalogError, ModelFile, ModelStatus, Recipe } from "../lib/types";
 
-const props = defineProps<{ baseUrl: string; busy: boolean; applyDefaults: boolean; loraSummary?: string }>();
+const props = defineProps<{ baseUrl: string; busy: boolean; applyDefaults: boolean; loraSummary?: string; embedded?: boolean }>();
 const emit = defineEmits<{
     (event: "update:applyDefaults", value: boolean): void;
     (event: "status", value: ModelStatus): void;
@@ -234,11 +234,12 @@ onBeforeUnmount(() => { revision++; window.clearInterval(timer); });
 </script>
 
 <template>
-    <CollapsibleSection class="model-selector" :open="expanded" @toggle="expanded = !expanded">
+    <CollapsibleSection class="model-selector" :class="{ 'model-selector--embedded': embedded }" :open="embedded || expanded" @toggle="expanded = !expanded">
         <template #header>
             <span class="module-card__eyebrow">Models</span>
             <span class="module-card__summary">{{ statusSummary }}</span>
         </template>
+        <p v-if="embedded" class="hint" role="status">{{ statusSummary }}</p>
         <div class="field model-selector__recipe">
             <label id="model-recipe-label" for="model-recipe">Recipe</label>
             <div class="model-selector__recipe-controls">
@@ -287,9 +288,13 @@ onBeforeUnmount(() => { revision++; window.clearInterval(timer); });
 .model-selector :deep(> .advanced-group__toggle) { border-radius: var(--radius-md) var(--radius-md) 0 0; }
 .model-selector :deep(> .advanced-group__toggle[aria-expanded="false"]) { border-bottom: 0; border-radius: var(--radius-md); }
 .model-selector :deep(> .advanced-group__content) { border-radius: 0 0 var(--radius-md) var(--radius-md); }
+.model-selector.model-selector--embedded { border: 0; padding: 0; background: transparent; box-shadow: none; }
+.model-selector--embedded :deep(> .advanced-group__toggle) { display: none; }
+.model-selector--embedded :deep(> .advanced-group__content) { padding: 0; background: transparent; border-radius: inherit; }
 .model-selector__recipe { width: 100%; }
 .model-selector__recipe-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; }
-.model-selector__recipe-controls .checkbox { white-space: nowrap; }
+.model-selector__recipe-controls .checkbox { justify-self: start; min-height: 24px; white-space: normal; line-height: 1.4; cursor: pointer; }
+.model-selector__recipe-controls .checkbox input { flex: 0 0 16px; width: 16px; height: 16px; margin: 0; padding: 0; }
 .model-selector p { margin: 0; }
 .model-selector__requirements:empty { display: none; }
 .model-selector__requirements .hint { color: var(--warning); }

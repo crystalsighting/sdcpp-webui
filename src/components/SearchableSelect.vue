@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import type { CSSProperties } from "vue";
 
 const props = defineProps<{
     id: string;
@@ -9,18 +10,60 @@ const props = defineProps<{
     disabled?: boolean;
     allowEmpty?: boolean;
     ariaLabel?: string;
+    contained?: boolean;
 }>();
 const emit = defineEmits<{ (event: "update:modelValue", value: string): void }>();
 const open = ref(false);
 const query = ref("");
 const active = ref(0);
 const list = ref<HTMLElement | null>(null);
+const input = ref<HTMLInputElement | null>(null);
+const listPosition = ref<CSSProperties>({});
+let observer: ResizeObserver | null = null;
 const selectedLabel = computed(() => props.options.find((item) => item.value === props.modelValue)?.label || "");
 const filtered = computed(() => {
     const options = props.allowEmpty ? [{ value: "", label: props.placeholder }, ...props.options] : props.options;
     const search = query.value.trim().toLocaleLowerCase();
     return options.filter((item) => `${item.label} ${item.value}`.toLocaleLowerCase().includes(search));
 });
+
+function positionList(): void {
+    if (!open.value || !props.contained || !input.value) return;
+    const rect = input.value.getBoundingClientRect();
+    const bounds = input.value.closest<HTMLElement>(".composer-panel__body")?.getBoundingClientRect();
+    const margin = 8;
+    const gap = 4;
+    const below = Math.min(bounds?.bottom ?? window.innerHeight, window.innerHeight) - rect.bottom - gap - margin;
+    const above = rect.top - Math.max(bounds?.top ?? 0, 0) - gap - margin;
+    const placeAbove = below < 260 && above > below;
+    listPosition.value = {
+        top: placeAbove ? "auto" : `${rect.height + gap}px`,
+        bottom: placeAbove ? `${rect.height + gap}px` : "auto",
+        maxHeight: `${Math.max(0, Math.min(260, placeAbove ? above : below))}px`,
+    };
+}
+
+function stopPositioning(): void {
+    window.removeEventListener("resize", positionList);
+    window.removeEventListener("scroll", positionList, true);
+    observer?.disconnect();
+    observer = null;
+}
+
+watch([open, () => props.contained], ([shown, contained]) => {
+    stopPositioning();
+    if (!shown || !contained) { listPosition.value = {}; return; }
+    positionList();
+    window.addEventListener("resize", positionList);
+    window.addEventListener("scroll", positionList, true);
+    if (input.value) {
+        observer = new ResizeObserver(positionList);
+        observer.observe(input.value);
+        const body = input.value.closest<HTMLElement>(".composer-panel__body");
+        if (body) observer.observe(body);
+    }
+}, { flush: "post" });
+onBeforeUnmount(stopPositioning);
 
 function show(): void {
     if (props.disabled || open.value) return;
@@ -44,6 +87,9 @@ function search(event: Event): void {
     query.value = (event.target as HTMLInputElement).value;
     active.value = 0;
     open.value = true;
+    void nextTick(() => {
+        if (list.value) list.value.scrollTop = 0;
+    });
 }
 
 function onKeydown(event: KeyboardEvent): void {
@@ -74,13 +120,13 @@ watch(filtered, (options, previous) => {
 
 <template>
     <div class="searchable-select">
-        <input :id="id" type="text" role="combobox" autocomplete="off" :disabled="disabled"
+        <input :id="id" ref="input" type="text" role="combobox" autocomplete="off" :disabled="disabled"
             :value="open ? query : selectedLabel" :placeholder="open ? 'Type to search…' : placeholder"
             :title="selectedLabel" :aria-label="ariaLabel" :aria-expanded="open" aria-autocomplete="list" aria-haspopup="listbox"
             :aria-controls="id + '-options'" :aria-activedescendant="open && filtered.length ? id + '-option-' + active : undefined"
             @focus="show" @click="show" @input="search" @keydown="onKeydown" @blur="open = false" />
         <span class="searchable-select__arrow" aria-hidden="true">▾</span>
-        <ul v-if="open" :id="id + '-options'" ref="list" class="searchable-select__options" role="listbox"
+        <ul v-if="open" :id="id + '-options'" ref="list" class="searchable-select__options" :style="listPosition" role="listbox"
             :aria-label="ariaLabel" :aria-labelledby="ariaLabel ? undefined : id + '-label'" @mousedown.prevent>
             <li v-for="(item, index) in filtered" :id="id + '-option-' + index" :key="item.value" role="option"
                 :aria-selected="item.value === modelValue" :class="{ 'is-active': index === active }"
@@ -97,7 +143,7 @@ watch(filtered, (options, previous) => {
 .searchable-select input:focus { border-color: var(--focus-border); box-shadow: 0 0 0 3px var(--focus-ring); }
 .searchable-select input:disabled { cursor: not-allowed; opacity: 0.6; }
 .searchable-select__arrow { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--muted); }
-.searchable-select__options { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 20; max-height: 260px; overflow-y: auto; margin: 0; padding: 4px; list-style: none; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
+.searchable-select__options { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 20; max-height: 260px; overflow-y: auto; overscroll-behavior: contain; margin: 0; padding: 4px; list-style: none; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
 .searchable-select__options li { padding: 8px; border-radius: 4px; overflow-wrap: anywhere; cursor: pointer; }
 .searchable-select__options li.is-active, .searchable-select__options li[role="option"]:hover { background: var(--primary-soft); }
 .searchable-select__options li[aria-selected="true"], .searchable-select__options li[aria-selected="true"]:hover { background: var(--select-option-selected-bg); color: var(--primary); font-weight: 600; }

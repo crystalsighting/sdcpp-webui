@@ -31,6 +31,7 @@ The current UI supports:
 - VAE tiling controls
 - cache controls
 - job polling, cancellation, image preview, and video or animated WebP preview
+- live preview mode and step interval always available in Settings, even before selecting a recipe, and saved locally; unsupported modes temporarily fall back to disabled without overwriting the saved preference
 - light and dark themes in Settings, defaulting to Device (follow the system theme); the choice is saved locally and system theme changes apply immediately
 
 ## Requirements

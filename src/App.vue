@@ -12,7 +12,7 @@ import { applyRecipeDefaults, buildRequestBodyForMode, createBlankForm, formFrom
 import { availableCacheModes, featuresForMode, supportsEta, supportsFlowShift, usesSCM } from "./lib/generation-features";
 import { IMAGE_INPUTS, VIDEO_IMAGE_INPUTS } from "./lib/image-inputs";
 import { assignImageEntries, clearImageEntries, filesToImageEntries, removeImageEntry } from "./lib/images";
-import { createStoredRef, normalizePollIntervalMs } from "./lib/settings";
+import { createStoredRef, normalizePollIntervalMs, normalizePreviewInterval } from "./lib/settings";
 import { useTheme } from "./lib/theme";
 import { useMediaInput } from "./lib/media-input";
 import type {
@@ -30,6 +30,8 @@ import type {
 
 const baseUrl = createStoredRef<string>("sdcpp-webui-base-url", "", (value: unknown) => String(value || ""));
 const pollIntervalMs = createStoredRef<number>("sdcpp-webui-poll-interval-ms", 100, normalizePollIntervalMs);
+const preferredPreviewMode = createStoredRef<string>("sdcpp-webui-preview-mode", "none", (value: unknown) => typeof value === "string" ? value : "none");
+const previewInterval = createStoredRef<number>("sdcpp-webui-preview-interval", 1, normalizePreviewInterval);
 const activeTab = ref<"image" | "video" | "settings">("image");
 const theme = useTheme();
 const selectedGenerationTab = ref<"image" | "video">("image");
@@ -50,7 +52,6 @@ const sectionState = reactive<Record<string, boolean>>({
     referenceMedia: true,
     lora: false,
     vaeTiling: false,
-    preview: false,
     cache: false,
 });
 const loadingCapabilities = ref(false);
@@ -147,7 +148,9 @@ const queueLimit = computed(() => capabilities.value?.limits?.max_queue_size ?? 
 const canCancelQueued = computed(() => Boolean(currentJobFeatures.value.cancel_queued));
 const canCancelGenerating = computed(() => Boolean(currentJobFeatures.value.cancel_generating));
 const supportsPreview = computed(() => hasFeature("preview"));
-const previewModes = computed(() => (capabilities.value?.preview_modes || ["none", "proj", "tae", "vae"]).filter((mode) => mode !== "tae" || hasFeature("preview_tae")));
+const previewModes = computed(() => capabilities.value?.preview_modes || ["none", "proj", "tae", "vae"]);
+const previewMode = computed(() => supportsPreview.value && previewModes.value.includes(preferredPreviewMode.value) &&
+    (preferredPreviewMode.value !== "tae" || hasFeature("preview_tae")) ? preferredPreviewMode.value : "none");
 
 const currentStatus = computed(() => currentJob.value?.status || "idle");
 const currentJobKind = computed(() => currentJob.value?.kind || null);
@@ -483,7 +486,11 @@ async function generate(): Promise<void> {
     if (!canGenerate.value || isJobRunning.value || mediaProcessing.value || submitting.value) return;
     submitting.value = true;
     try {
-        const request = buildRequestBodyForMode(generationMode.value, form, generationFeatures.value);
+        const request = buildRequestBodyForMode(generationMode.value, {
+            ...form,
+            preview_mode: previewMode.value,
+            preview_interval: normalizePreviewInterval(previewInterval.value),
+        }, generationFeatures.value);
         clearMessage();
         selectedOutputIndex.value = 0;
         startElapsedTimer();
@@ -621,7 +628,6 @@ async function onPaste(event: ClipboardEvent): Promise<void> {
 watch(baseUrl, () => { selectedRecipe.value = null; });
 
 watch(cacheModes, (modes) => { if (!modes.includes(form.cache.mode)) form.cache.mode = "disabled"; });
-watch(previewModes, (modes) => { if (!modes.includes(form.preview_mode)) form.preview_mode = "none"; });
 watch(generationFeatures, (features) => {
     if (!features.high_noise) form.lora = form.lora.filter((item) => !item.is_high_noise);
     if (!features.ref_video_audios) videoInput.setUseAudio(false);
@@ -716,6 +722,24 @@ onBeforeUnmount(() => {
                         <input v-model.number="pollIntervalMs" type="number" min="1" step="1" />
                     </div>
                 </div>
+                <fieldset class="settings__group">
+                    <legend>Live Preview</legend>
+                    <div class="settings__grid">
+                        <div class="field">
+                            <label for="preview-mode">Preview Mode</label>
+                            <select id="preview-mode" v-model="preferredPreviewMode">
+                                <option v-for="mode in previewModes" :key="mode" :value="mode">{{ mode }}</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="preview-interval">Interval (steps)</label>
+                            <input id="preview-interval" v-model.number="previewInterval" type="number" min="1" step="1" :disabled="preferredPreviewMode === 'none'" />
+                        </div>
+                    </div>
+                    <div v-if="(selectedRecipe || modelReady) && preferredPreviewMode !== previewMode" class="hint stack-top">
+                        The selected preview mode is unavailable for the current model configuration. Preview will be disabled; your preference is saved.
+                    </div>
+                </fieldset>
                 <div v-if="capabilitiesError" class="status-message status-message--error">{{ capabilitiesError }}</div>
             </div>
         </header>
@@ -1006,21 +1030,6 @@ onBeforeUnmount(() => {
                     <div class="fields">
                         <div class="field"><label>Relative Width</label><input v-model.number="form.vae_tiling_params.rel_size_w" type="number" step="0.01" /></div>
                         <div class="field"><label>Relative Height</label><input v-model.number="form.vae_tiling_params.rel_size_h" type="number" step="0.01" /></div>
-                    </div>
-                </CollapsibleSection>
-
-                <CollapsibleSection v-if="supportsPreview" class="stack-top" eyebrow="Preview" :summary="form.preview_mode === 'none' ? 'Disabled' : form.preview_mode" :open="sectionState.preview" @toggle="toggleSection('preview')">
-                    <div class="fields">
-                        <div class="field">
-                            <label>Preview Mode</label>
-                            <select v-model="form.preview_mode">
-                                <option v-for="mode in previewModes" :key="mode" :value="mode">{{ mode }}</option>
-                            </select>
-                        </div>
-                        <div class="field">
-                            <label>Interval (steps)</label>
-                            <input v-model.number="form.preview_interval" type="number" min="1" step="1" />
-                        </div>
                     </div>
                 </CollapsibleSection>
 

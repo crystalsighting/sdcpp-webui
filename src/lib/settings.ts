@@ -1,5 +1,10 @@
 import { type Ref, ref, watch } from "vue";
 
+export function normalizePreviewInterval(value: unknown): number {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? Math.max(1, Math.round(numeric)) : 1;
+}
+
 export function normalizePollIntervalMs(value: unknown): number {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) {

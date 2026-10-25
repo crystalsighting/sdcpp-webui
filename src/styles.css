@@ -345,6 +345,20 @@ button {
     grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.settings__group {
+    min-width: 0;
+    margin: 20px 0 0;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+
+.settings__group legend {
+    padding: 0 6px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
 .layout {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(420px, 520px);

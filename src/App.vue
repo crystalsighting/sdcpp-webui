@@ -242,10 +242,11 @@ const highNoiseSummary = computed(() => {
     return `moe ${formatSummaryNumber(form.moe_boundary)} · ${buildSampleSummary(form.high_noise_sample_params)} · ${buildGuidanceSummary(form.high_noise_sample_params)}`;
 });
 const loraSummary = computed(() => {
-    if (!form.lora.length) {
+    const count = form.lora.filter((item) => item.path.trim()).length;
+    if (!count) {
         return "No LoRA";
     }
-    return `${form.lora.length} configured`;
+    return `${count} configured`;
 });
 const imageInputsSummary = computed(() => {
     const parts: string[] = [];
@@ -519,7 +520,7 @@ async function cancelCurrentJob(): Promise<void> {
 
 function addLora(): void {
     form.lora.push({
-        path: availableLoras.value[0]?.path || "",
+        path: "",
         multiplier: 1,
         is_high_noise: false,
     });

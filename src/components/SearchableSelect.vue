@@ -25,8 +25,14 @@ const filtered = computed(() => {
 function show(): void {
     if (props.disabled || open.value) return;
     query.value = "";
-    active.value = 0;
+    active.value = Math.max(0, filtered.value.findIndex((item) => item.value === props.modelValue));
     open.value = true;
+    void nextTick(() => {
+        const option = list.value?.children[active.value] as HTMLElement | undefined;
+        if (list.value && option) {
+            list.value.scrollTop = option.offsetTop - (list.value.clientHeight - option.offsetHeight) / 2;
+        }
+    });
 }
 
 function choose(value: string): void {
@@ -60,7 +66,10 @@ function onKeydown(event: KeyboardEvent): void {
 
 watch(() => props.disabled, (disabled) => { if (disabled) open.value = false; });
 watch(() => props.modelValue, () => { open.value = false; });
-watch(filtered, () => { active.value = 0; });
+watch(filtered, (options, previous) => {
+    const value = previous[active.value]?.value;
+    active.value = Math.max(0, options.findIndex((item) => item.value === value));
+}, { flush: "sync" });
 </script>
 
 <template>
@@ -90,7 +99,7 @@ watch(filtered, () => { active.value = 0; });
 .searchable-select__arrow { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--muted); }
 .searchable-select__options { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 20; max-height: 260px; overflow-y: auto; margin: 0; padding: 4px; list-style: none; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
 .searchable-select__options li { padding: 8px; border-radius: 4px; overflow-wrap: anywhere; cursor: pointer; }
-.searchable-select__options li.is-active { background: var(--panel-subtle); }
-.searchable-select__options li[aria-selected="true"] { font-weight: 600; }
+.searchable-select__options li.is-active, .searchable-select__options li[role="option"]:hover { background: var(--primary-soft); }
+.searchable-select__options li[aria-selected="true"], .searchable-select__options li[aria-selected="true"]:hover { background: var(--select-option-selected-bg); color: var(--primary); font-weight: 600; }
 .searchable-select__options .searchable-select__empty { color: var(--muted); cursor: default; }
 </style>

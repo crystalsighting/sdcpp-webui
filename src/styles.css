@@ -23,6 +23,7 @@
     --chip-bg: #f3f4f6;
     --primary: #111827;
     --primary-soft: #f3f4f6;
+    --select-option-selected-bg: #e5e7eb;
     --success: #0f766e;
     --warning: #9a6700;
     --danger: #b42318;
@@ -70,6 +71,7 @@
     --chip-bg: #202020;
     --primary: #ededed;
     --primary-soft: #262626;
+    --select-option-selected-bg: #363636;
     --primary-text: #171717;
     --primary-hover: #d4d4d4;
     --success: #86cfa3;

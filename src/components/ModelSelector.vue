@@ -72,7 +72,7 @@ function acceptStatus(next: ModelStatus): void {
     status.value = next;
     emit("status", next);
     if (selectedId.value === "@command-line" && !next.runtime_recipe) {
-        selectedId.value = next.recipe || recipes.value[0]?.id || "";
+        selectedId.value = next.recipe || "";
         restoreSelection();
         emit("catalogRecipe", recipe.value || null);
     }
@@ -110,7 +110,7 @@ async function refresh(rescan = true): Promise<void> {
         if (!availableRecipes.value.some((item) => item.id === selectedId.value)) {
             const activeId = next.runtime_recipe?.id || next.recipe;
             selectedId.value = availableRecipes.value.some((item) => item.id === activeId)
-                ? activeId! : availableRecipes.value[0]?.id || "";
+                ? activeId! : "";
             restoreSelection();
         }
         emit("catalogRecipe", recipe.value || null);
